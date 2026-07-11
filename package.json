@@ -1,5 +1,20 @@
 {
+  "name": "gensight-monitor",
+  "version": "2.0.0",
+  "description": "Cummins 400kVA PS0600 GenSet Monitor — A029X159 Issue 29",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
   "dependencies": {
-    "mongodb": "^7.2.0"
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^4.22.1",
+    "mongodb": "^6.17.0",
+    "mqtt": "^5.15.1",
+    "nodemailer": "^9.0.3",
+    "socket.io": "^4.8.3"
   }
 }

@@ -1,0 +1,4208 @@
+
+:root {
+  --bg:         #F0F4FF;
+  --bg2:        #FFFFFF;
+  --surface:    #FFFFFF;
+  --surface2:   #F8FAFF;
+  --border:     #E2E8F5;
+  --border2:    #C8D5EF;
+
+  --txt1: #0A0F1E;
+  --txt2: #1E2A3A;
+  --txt3: #4A5568;
+
+  --accent:     #2563EB;
+  --accent2:    #1D4ED8;
+  --accent-dim: rgba(37,99,235,.08);
+
+  --green:      #059669;
+  --green-dim:  rgba(5,150,105,.08);
+  --green-light:#D1FAE5;
+  --amber:      #D97706;
+  --amber-dim:  rgba(217,119,6,.08);
+  --amber-light:#FEF3C7;
+  --red:        #DC2626;
+  --red-dim:    rgba(220,38,38,.08);
+  --red-light:  #FEE2E2;
+  --purple:     #7C3AED;
+  --purple-dim: rgba(124,58,237,.08);
+
+  --ph-a:      #2563EB;
+  --ph-b:      #7C3AED;
+  --ph-c:      #EA580C;
+
+  --r-sm: 8px;
+  --r:    12px;
+  --r-lg: 20px;
+
+  --shadow: 0 1px 8px rgba(37,99,235,.08), 0 2px 20px rgba(0,0,0,.04);
+  --shadow-hover: 0 4px 24px rgba(37,99,235,.15), 0 2px 8px rgba(0,0,0,.06);
+
+ --font: 'Nunito', system-ui, -apple-system, sans-serif;
+--mono: 'JetBrains Mono', ui-monospace, 'Cascadia Code', monospace;
+
+  --hdr-h:  64px;
+  --hero-h: 62px;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 16px; scroll-behavior: smooth; }
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--txt1);
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+.mono { font-family: var(--mono) !important; }
+
+/* ─── Header ─────────────────────────────────────────────── */
+.site-header {
+  position: sticky; top: 0; z-index: 200;
+  height: var(--hdr-h);
+  background: var(--bg2);
+  border-bottom: 2px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 28px;
+  box-shadow: var(--shadow);
+}
+.hdr-brand { display: flex; align-items: center; gap: 14px; }
+.hdr-logo {
+  width: 42px; height: 42px;
+  background: linear-gradient(135deg, #2563EB, #7C3AED);
+  border-radius: 12px;
+  display: grid; place-items: center;
+  font-size: 1.4rem;
+  flex-shrink: 0;
+  box-shadow: 0 4px 12px rgba(37,99,235,.3);
+}
+.hdr-title {
+  font-size: 1.3rem; font-weight: 900;
+  letter-spacing: .1em; color: var(--txt2);
+}
+.hdr-title span { color: var(--accent); }
+.hdr-sub { font-size: .65rem; color: var(--txt3); letter-spacing: .04em; margin-top: 2px; }
+.hdr-right { display: flex; align-items: center; gap: 20px; }
+.conn-badge {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 14px; border-radius: 20px;
+  background: var(--green-dim);
+  border: 1.5px solid var(--green);
+  font-size: .78rem; font-weight: 700;
+  color: var(--green);
+}
+.conn-badge.err { background: var(--red-dim); border-color: var(--red); color: var(--red); }
+.conn-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--green);
+  animation: pulse 2s infinite;
+}
+@keyframes pulse {
+  0%,100% { box-shadow: 0 0 0 2px rgba(5,150,105,.3); }
+  50%      { box-shadow: 0 0 0 6px rgba(5,150,105,.05); }
+}
+.hdr-clock { font-family: var(--mono); font-size: .88rem; color: var(--txt2); font-weight: 600; letter-spacing: .06em; }
+
+/* ─── Hero Bar ─────────────────────────────────────────── */
+.hero-bar {
+  background: var(--bg2);
+  border-bottom: 2px solid var(--border);
+  display: flex; align-items: center;
+  padding: 0 28px; gap: 0;
+  overflow-x: auto; min-height: var(--hero-h);
+}
+.hero-cell { display: flex; flex-direction: column; padding: 0 18px; gap: 4px; flex-shrink: 0; }
+.hero-lbl { font-size: .60rem; font-weight: 800; letter-spacing: .1em; color: var(--txt3); text-transform: uppercase; }
+.hero-val { font-size: 1rem; font-weight: 800; color: var(--txt1); }
+.hero-sep { width: 1px; height: 32px; background: var(--border); flex-shrink: 0; }
+.state-chip {
+  font-size: .75rem !important;
+  padding: 3px 12px; border-radius: 14px;
+  border: 1.5px solid var(--border2);
+  background: var(--surface2);
+  font-weight: 800;
+}
+.state-chip.running { background: var(--green-light); border-color: var(--green); color: var(--green); }
+.state-chip.fault   { background: var(--red-light);   border-color: var(--red);   color: var(--red); }
+.state-chip.stopped,.state-chip.standby { background: var(--amber-light); border-color: var(--amber); color: var(--amber); }
+.hero-fuel { display: flex; align-items: center; gap: 10px; }
+.fuel-bar-bg { width: 70px; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+.fuel-bar-fill { height: 100%; background: linear-gradient(90deg, var(--green), #34D399); border-radius: 3px; transition: width .6s; }
+
+/* ─── Main Grid ─────────────────────────────────────────── */
+.main-grid { max-width: 1800px; margin: 0 auto; padding: 28px 28px 72px; display: flex; flex-direction: column; gap: 32px; }
+
+/* ─── Section ───────────────────────────────────────────── */
+.sec-head { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
+.sec-tag {
+  font-size: .65rem; font-weight: 800; letter-spacing: .1em;
+  padding: 4px 12px; border-radius: 6px;
+}
+.ac-tag   { background: rgba(37,99,235,.1);   color: var(--accent); }
+.eng-tag  { background: rgba(217,119,6,.1);   color: var(--amber); }
+.fuel-tag { background: rgba(5,150,105,.1);   color: var(--green); }
+.util-tag { background: rgba(124,58,237,.1);  color: var(--purple); }
+.sys-tag  { background: rgba(220,38,38,.1);   color: var(--red); }
+.sec-title { font-size: .88rem; font-weight: 800; letter-spacing: .06em; color: var(--txt2); text-transform: uppercase; }
+.sec-hint { font-size: .70rem; color: var(--txt3); margin-left: auto; background: var(--accent-dim); padding: 3px 10px; border-radius: 20px; }
+
+/* ─── Card Row ──────────────────────────────────────────── */
+.card-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 16px;
+}
+
+/* ─── Card Base ─────────────────────────────────────────── */
+.card {
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 20px;
+  box-shadow: var(--shadow);
+  display: flex; flex-direction: column;
+  transition: all .2s;
+}
+.card.clickable { cursor: pointer; }
+.card.clickable:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-hover);
+  transform: translateY(-2px);
+}
+.card-label {
+  font-size: .68rem; font-weight: 800; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--txt3);
+  margin-bottom: 14px;
+}
+.card-explain { font-size: .68rem; color: var(--txt2); margin-top: 10px; line-height: 1.5; background: var(--surface2); padding: 6px 10px; border-radius: 8px; border-left: 3px solid var(--accent); }
+.click-hint { font-size: .62rem; color: var(--accent); margin-top: 8px; text-align: center; opacity: .7; }
+.card.clickable:hover .click-hint { opacity: 1; }
+
+/* ─── Gauge Cards ───────────────────────────────────────── */
+.gauge-wrap { position: relative; display: flex; justify-content: center; }
+.gauge-wrap canvas { display: block; }
+.gauge-over { position: absolute; bottom: 6px; left: 50%; transform: translateX(-50%); text-align: center; }
+.g-val { display: block; font-family: var(--mono); font-size: 1.5rem; font-weight: 700; color: var(--txt1); line-height: 1; }
+.g-unit { font-size: .65rem; color: var(--txt3); }
+
+/* ─── Phase Big Row ─────────────────────────────────────── */
+.phase-big-row { display: flex; gap: 8px; justify-content: space-between; margin-bottom: 4px; }
+.phase-big { flex: 1; padding: 10px 6px; border-radius: 10px; text-align: center; }
+.phase-big.ph-a { background: rgba(37,99,235,.06); border: 1px solid rgba(37,99,235,.15); }
+.phase-big.ph-b { background: rgba(124,58,237,.06); border: 1px solid rgba(124,58,237,.15); }
+.phase-big.ph-c { background: rgba(234,88,12,.06);  border: 1px solid rgba(234,88,12,.15); }
+.pb-label { display: block; font-size: .62rem; font-weight: 800; margin-bottom: 4px; }
+.phase-big.ph-a .pb-label { color: var(--ph-a); }
+.phase-big.ph-b .pb-label { color: var(--ph-b); }
+.phase-big.ph-c .pb-label { color: var(--ph-c); }
+.pb-val { display: block; font-family: var(--mono); font-size: 1.1rem; font-weight: 700; color: var(--txt1); line-height: 1; }
+.pb-unit { font-size: .60rem; color: var(--txt3); }
+
+/* ─── Phase Pills ───────────────────────────────────────── */
+.phase-pills { display: flex; gap: 6px; flex-wrap: wrap; }
+.pp { font-family: var(--mono); font-size: .70rem; padding: 3px 8px; border-radius: 6px; }
+.ph-a { background: rgba(37,99,235,.08); color: var(--ph-a); font-weight: 600; }
+.ph-b { background: rgba(124,58,237,.08); color: var(--ph-b); font-weight: 600; }
+.ph-c { background: rgba(234,88,12,.08); color: var(--ph-c); font-weight: 600; }
+
+/* ─── L-L Table ─────────────────────────────────────────── */
+.ll-table { display: flex; flex-direction: column; gap: 10px; }
+.ll-row { display: flex; align-items: baseline; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+.ll-row:last-child { border-bottom: none; }
+.ll-lbl { font-size: .70rem; font-weight: 800; min-width: 40px; }
+.ll-val { font-size: 1.3rem; font-weight: 700; color: var(--txt1); flex: 1; }
+.ll-u   { font-size: .68rem; color: var(--txt3); }
+
+/* ─── Frequency ─────────────────────────────────────────── */
+.freq-target { font-size: .70rem; color: var(--green); font-weight: 700; margin-top: 6px; }
+
+/* ─── Amps Section ──────────────────────────────────────── */
+.amps-formula { font-size: .65rem; color: var(--txt3); font-family: var(--mono); background: var(--surface2); padding: 6px 10px; border-radius: 6px; margin-top: 8px; }
+.amps-breakdown { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+.ab-row { display: flex; align-items: center; gap: 6px; font-size: .70rem; color: var(--txt2); }
+.ab-row .mono { color: var(--txt1); font-weight: 600; flex: 1; text-align: right; }
+
+/* ─── Current % Bars ────────────────────────────────────── */
+.curr-pct-list { display: flex; flex-direction: column; gap: 12px; flex: 1; justify-content: center; }
+.cpct-row { display: flex; align-items: center; gap: 8px; }
+.cpct-lbl { font-size: .70rem; font-weight: 800; min-width: 22px; }
+.cpct-bar-wrap { flex: 1; height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }
+.cpct-bar { height: 100%; border-radius: 4px; transition: width .6s; }
+.ph-a-fill { background: linear-gradient(90deg, var(--ph-a), #60A5FA); }
+.ph-b-fill { background: linear-gradient(90deg, var(--ph-b), #A78BFA); }
+.ph-c-fill { background: linear-gradient(90deg, var(--ph-c), #FB923C); }
+.cpct-val { font-size: .72rem; min-width: 40px; text-align: right; font-weight: 700; font-family: var(--mono); }
+
+/* ─── Power Cards ───────────────────────────────────────── */
+.power-total { font-size: 2.8rem; font-weight: 800; line-height: 1; color: var(--txt1); }
+.power-sub   { font-size: .72rem; color: var(--txt3); margin-top: 4px; font-weight: 600; }
+.load-bar-wrap { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.load-bar { flex: 1; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+.load-fill { height: 100%; border-radius: 3px; transition: width .6s; }
+.kw-fill  { background: linear-gradient(90deg, var(--green), #34D399); }
+.kva-fill { background: linear-gradient(90deg, var(--accent), #60A5FA); }
+.oil-fill { background: linear-gradient(90deg, var(--amber), #FCD34D); }
+.load-pct { font-family: var(--mono); font-size: .70rem; color: var(--txt2); min-width: 34px; font-weight: 700; }
+.power-detail-row { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.pd { font-family: var(--mono); font-size: .70rem; color: var(--txt3); }
+.pd b { color: var(--txt1); }
+
+/* ─── Power Factor Ring ─────────────────────────────────── */
+.pf-card { align-items: center; }
+.pf-ring-host { position: relative; width: 130px; height: 130px; }
+.pf-svg { width: 130px; height: 130px; transform: rotate(-90deg); }
+.pf-track { fill: none; stroke: var(--border); stroke-width: 9; }
+.pf-arc   { fill: none; stroke: var(--green); stroke-width: 9; stroke-linecap: round; transition: stroke-dasharray .6s, stroke .4s; }
+.pf-center { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+.pf-num   { font-family: var(--mono); font-size: 1.6rem; font-weight: 700; color: var(--txt1); }
+.pf-status { font-size: .75rem; color: var(--txt2); margin-top: 10px; font-weight: 700; text-align: center; }
+
+/* ─── Big Number ────────────────────────────────────────── */
+.big-num  { font-size: 2.6rem; font-weight: 800; line-height: 1; color: var(--txt1); }
+.big-unit { font-size: .78rem; color: var(--txt3); margin-top: 4px; font-weight: 600; }
+
+/* ─── Temp List ─────────────────────────────────────────── */
+.temp-list { display: flex; flex-direction: column; gap: 6px; flex: 1; }
+.temp-row { display: flex; align-items: center; gap: 6px; padding: 7px 0; border-bottom: 1px dashed var(--border); }
+.temp-row:last-child { border-bottom: none; }
+.tr-lbl { font-size: .70rem; color: var(--txt2); flex: 1; font-weight: 600; }
+.tr-val { font-size: 1rem; font-weight: 700; color: var(--txt1); }
+.tr-u   { font-size: .65rem; color: var(--txt3); }
+
+/* ─── Battery ───────────────────────────────────────────── */
+.batt-display { display: flex; align-items: center; gap: 16px; margin-bottom: 10px; }
+.batt-icon { display: flex; align-items: center; }
+.batt-body { width: 65px; height: 28px; border: 2.5px solid var(--border2); border-radius: 5px; overflow: hidden; position: relative; }
+.batt-fill { height: 100%; background: linear-gradient(90deg, var(--green), #34D399); transition: width .6s; }
+.batt-nub  { width: 6px; height: 16px; background: var(--border2); border-radius: 0 4px 4px 0; }
+.batt-nums { display: flex; flex-direction: column; }
+
+/* ─── Sub Data ──────────────────────────────────────────── */
+.sub-data { display: flex; align-items: center; gap: 6px; margin-top: 7px; padding-top: 7px; border-top: 1px dashed var(--border); }
+.sd-lbl { font-size: .65rem; color: var(--txt3); flex: 1; font-weight: 600; }
+.sd-val { font-size: .88rem; color: var(--txt1); font-weight: 700; }
+.sd-u   { font-size: .65rem; color: var(--txt3); }
+
+/* ─── Hours Card ────────────────────────────────────────── */
+.hours-big  { font-size: 2.8rem; font-weight: 800; letter-spacing: .04em; color: var(--accent); line-height: 1; }
+.hours-unit { font-size: .72rem; color: var(--txt3); margin-top: 4px; font-weight: 600; }
+.hours-divider { height: 1.5px; background: var(--border); margin: 14px 0; }
+.service-rows { display: flex; flex-direction: column; gap: 8px; }
+.svc-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.svc-lbl { font-size: .68rem; color: var(--txt3); font-weight: 600; }
+.svc-val { font-size: .78rem; color: var(--txt2); font-weight: 700; }
+.svc-val.accent { color: var(--amber); }
+.highlight-svc { padding-top: 8px; border-top: 1.5px solid var(--border); }
+
+/* ─── Chart Card ────────────────────────────────────────── */
+.chart-card { grid-column: span 2; }
+.chart-container { position: relative; height: 180px; width: 100%; }
+
+/* ─── Fuel Section ──────────────────────────────────────── */
+.fuel-row { grid-template-columns: 220px 1fr !important; }
+.fuel-tank-card { align-items: center; }
+.tank-visual { margin: 12px 0; }
+.tank-outer {
+  width: 90px; height: 140px;
+  border: 2.5px solid var(--border2);
+  border-radius: 8px 8px 10px 10px;
+  position: relative; overflow: hidden;
+  background: var(--surface2);
+  box-shadow: inset 0 2px 8px rgba(0,0,0,.05);
+}
+.tank-fill {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  background: linear-gradient(to top, var(--green), rgba(52,211,153,.4));
+  transition: height .8s ease;
+}
+.tank-pct {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1rem; font-weight: 800; color: var(--txt1);
+  z-index: 1;
+}
+.tank-meta { width: 100%; }
+.tm-row { display: flex; align-items: center; gap: 6px; margin-top: 7px; padding: 4px 0; border-bottom: 1px dashed var(--border); }
+.tm-row:last-child { border-bottom: none; }
+.tm-lbl { font-size: .65rem; color: var(--txt3); flex: 1; font-weight: 600; }
+.tm-val { font-size: .9rem; font-weight: 800; color: var(--txt1); }
+.tm-u   { font-size: .65rem; color: var(--txt3); }
+.fuel-stats { margin-top: 12px; display: flex; flex-direction: column; gap: 6px; }
+.fs-row { display: flex; align-items: center; gap: 6px; font-size: .72rem; color: var(--txt2); background: var(--surface2); padding: 6px 10px; border-radius: 8px; }
+.fs-row .mono { font-weight: 700; color: var(--txt1); flex: 1; text-align: right; }
+
+/* ─── Utility Explain ───────────────────────────────────── */
+.utility-explain { margin-bottom: 14px; }
+.ue-box { background: rgba(37,99,235,.06); border: 1.5px solid rgba(37,99,235,.2); border-radius: 10px; padding: 12px 16px; font-size: .75rem; color: var(--txt2); line-height: 1.6; }
+.ue-box strong { color: var(--txt1); }
+.ue-warning { background: rgba(220,38,38,.06); border-color: rgba(220,38,38,.2); }
+.ue-warning strong { color: var(--red); }
+
+/* ─── Status Layout ─────────────────────────────────────── */
+.status-layout {
+  display: grid;
+  grid-template-columns: 240px 320px 1fr 280px;
+  gap: 16px;
+}
+
+/* ─── State Card ────────────────────────────────────────── */
+.state-display { display: flex; align-items: center; gap: 14px; margin: 12px 0; }
+.state-led { width: 18px; height: 18px; border-radius: 50%; background: var(--txt3); transition: all .4s; flex-shrink: 0; }
+.state-led.running { background: var(--green); box-shadow: 0 0 0 5px var(--green-dim); animation: pulse 2s infinite; }
+.state-led.fault   { background: var(--red);   box-shadow: 0 0 0 5px var(--red-dim); }
+.state-led.stopped,.state-led.standby { background: var(--amber); box-shadow: 0 0 0 5px var(--amber-dim); }
+.state-name { font-size: 1.3rem; font-weight: 900; color: var(--txt1); }
+.state-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.stype-chip { font-size: .65rem; padding: 3px 10px; border-radius: 6px; background: var(--surface2); border: 1px solid var(--border2); color: var(--txt2); font-weight: 700; }
+.state-note { font-size: .72rem; color: var(--txt3); }
+
+/* ─── Fault Card ────────────────────────────────────────── */
+.fault-banner {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--green-light); border: 1.5px solid var(--green);
+  border-radius: 10px; padding: 10px 14px; margin-bottom: 12px; transition: all .4s;
+}
+.fault-banner.active { background: var(--red-light); border-color: var(--red); }
+.fault-icon { font-size: 1.2rem; }
+.fault-text { font-size: .82rem; font-weight: 700; color: var(--txt1); }
+.fault-meta { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.fm-row { display: flex; align-items: center; gap: 8px; }
+.fm-lbl { font-size: .65rem; color: var(--txt3); min-width: 56px; font-weight: 700; }
+.fm-val { font-size: .85rem; color: var(--txt1); font-weight: 700; }
+.fault-table-wrap { margin-bottom: 10px; }
+.ft-head { font-size: .62rem; font-weight: 800; letter-spacing: .08em; color: var(--txt3); text-transform: uppercase; margin-bottom: 5px; }
+.ft-rows { display: flex; flex-direction: column; gap: 3px; }
+.ft-empty { font-size: .72rem; color: var(--green); font-weight: 700; padding: 4px 0; }
+.ft-item { font-family: var(--mono); font-size: .70rem; padding: 4px 10px; border-radius: 4px; background: var(--red-light); border-left: 3px solid var(--red); color: var(--red); font-weight: 700; }
+.ft-item.warn { background: var(--amber-light); border-color: var(--amber); color: var(--amber); }
+
+/* ─── NFPA Grid ─────────────────────────────────────────── */
+.nfpa-card { overflow: hidden; }
+.nfpa-explain { font-size: .68rem; color: var(--txt3); margin-bottom: 8px; }
+.nfpa-raw { font-size: .80rem; color: var(--accent); margin-bottom: 12px; font-weight: 700; }
+.nfpa-addr { font-size: .65rem; margin-left: 8px; color: var(--txt3); }
+.nfpa-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; overflow-y: auto; max-height: 300px; }
+.nfpa-bit {
+  display: flex; align-items: center; gap: 7px;
+  padding: 4px 8px; border-radius: 6px;
+  font-size: .65rem; color: var(--txt3);
+  background: var(--surface2); border: 1px solid var(--border);
+  transition: all .3s;
+}
+.nfpa-bit .nb-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--border2); flex-shrink: 0; }
+.nfpa-bit.active-warn { color: var(--amber); border-color: var(--amber); background: var(--amber-light); font-weight: 700; }
+.nfpa-bit.active-warn .nb-dot { background: var(--amber); }
+.nfpa-bit.active-shut { color: var(--red); border-color: var(--red); background: var(--red-light); font-weight: 700; }
+.nfpa-bit.active-shut .nb-dot { background: var(--red); }
+.nfpa-bit.active-info { color: var(--green); border-color: var(--green); background: var(--green-light); font-weight: 700; }
+.nfpa-bit.active-info .nb-dot { background: var(--green); }
+
+/* ─── Event Log ─────────────────────────────────────────── */
+.log-card { overflow: hidden; }
+.event-log { list-style: none; max-height: 340px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+.log-entry { font-family: var(--mono); font-size: .68rem; padding: 5px 12px; border-radius: 6px; border-left: 3px solid transparent; font-weight: 500; }
+.log-info  { background: rgba(37,99,235,.06); border-color: var(--accent); color: var(--accent); }
+.log-warn  { background: var(--amber-light);  border-color: var(--amber);  color: var(--amber); }
+.log-error { background: var(--red-light);    border-color: var(--red);    color: var(--red); }
+.log-ok    { background: var(--green-light);  border-color: var(--green);  color: var(--green); }
+
+/* ─── Help Tip ──────────────────────────────────────────── */
+.help-tip { cursor: help; opacity: .6; font-style: normal; }
+
+/* ─── Footer ────────────────────────────────────────────── */
+.site-footer {
+  position: fixed; bottom: 0; left: 0; right: 0;
+  height: 40px;
+  background: var(--bg2);
+  border-top: 1.5px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 28px;
+  font-size: .68rem; color: var(--txt3);
+  z-index: 100; font-weight: 600;
+}
+
+/* ─── Scrollbar ─────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+
+/* ─── Modal / Graph Popup ───────────────────────────────── */
+/* .modal-overlay {
+  display: none; position: fixed; inset: 0; z-index: 1000;
+  background: rgba(15,23,42,.5); backdrop-filter: blur(6px);
+  align-items: center; justify-content: center;
+} */
+.modal-overlay.open { display: flex; }
+.modal-box {
+  background: var(--bg2); border-radius: 20px;
+  border: 1.5px solid var(--border);
+  box-shadow: 0 24px 64px rgba(0,0,0,.2);
+  width: min(900px, 95vw); max-height: 90vh;
+  overflow: hidden; display: flex; flex-direction: column;
+  animation: slideUp .3s ease;
+}
+@keyframes slideUp {
+  from { transform: translateY(30px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+.modal-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 20px 24px; border-bottom: 1.5px solid var(--border);
+  background: linear-gradient(135deg, rgba(37,99,235,.04), rgba(124,58,237,.04));
+}
+.modal-title { font-size: 1rem; font-weight: 800; color: var(--txt1); }
+.modal-close {
+  width: 34px; height: 34px; border-radius: 50%; border: none;
+  background: var(--surface2); color: var(--txt2); font-size: .9rem; cursor: pointer;
+  display: grid; place-items: center; font-weight: 700;
+  transition: all .2s;
+}
+.modal-close:hover { background: var(--red-light); color: var(--red); }
+.modal-chart-container { flex: 1; padding: 24px; min-height: 380px; }
+.modal-stats {
+  display: flex; gap: 12px; padding: 0 24px 16px; flex-wrap: wrap;
+}
+.modal-stat {
+  flex: 1; min-width: 120px; background: var(--surface2); border-radius: 10px;
+  padding: 12px 16px; border: 1px solid var(--border);
+}
+.modal-stat-lbl { font-size: .60rem; color: var(--txt3); font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }
+.modal-stat-val { font-size: 1.3rem; font-weight: 800; color: var(--txt1); font-family: var(--mono); margin-top: 4px; }
+
+/* ─── Responsive ────────────────────────────────────────── */
+@media (max-width: 1200px) {
+  .status-layout { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 900px) {
+  .card-row { grid-template-columns: 1fr 1fr; }
+  .chart-card { grid-column: span 1; }
+  .status-layout { grid-template-columns: 1fr; }
+  .fuel-row { grid-template-columns: 1fr !important; }
+}
+@media (max-width: 560px) {
+  .card-row { grid-template-columns: 1fr; }
+  .main-grid { padding: 16px 14px 72px; }
+  .phase-big-row { flex-direction: column; }
+}
+
+/* ── Clickable card indicator ────────────────────────────────── */
+.clickable-section {
+  cursor: pointer;
+  transition: transform .18s, box-shadow .18s, border-color .18s;
+  position: relative;
+}
+.clickable-section:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 8px 32px rgba(0,0,0,.35);
+  border-color: rgba(59,130,246,.4) !important;
+}
+.clickable-section:active { transform: translateY(-1px); }
+ 
+.section-drill-hint {
+  margin-left: auto;
+  font-size: .7rem; font-weight: 800;
+  color: #3B82F6; opacity: .7;
+  letter-spacing: .06em; text-transform: uppercase;
+  transition: opacity .15s;
+}
+.clickable-section:hover .section-drill-hint { opacity: 1; }
+ 
+/* ── param-grid-2 (2-column grid inside param-row) ──────────── */
+.param-grid-2 {
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: 4px 20px; font-size: .82rem; color: #94A3B8;
+}
+.param-grid-2 b { color: #E2E8F0; margin-left: 4px; }
+ 
+/* ── Power summary row ───────────────────────────────────────── */
+.power-summary-row {
+  display: flex; gap: 8px; flex-wrap: wrap;
+  margin: 12px 0 6px;
+}
+.psum-cell {
+  flex: 1; min-width: 70px;
+  background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.06);
+  border-radius: 8px; padding: 8px 10px; text-align: center;
+}
+.psum-lbl  { font-size: .65rem; color: #4B5563; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; margin-bottom: 4px; }
+.psum-val  { font-size: 1.05rem; font-weight: 900; font-family: 'JetBrains Mono', monospace; color: #E2E8F0; }
+.psum-unit { font-size: .65rem; color: #4B5563; margin-top: 2px; }
+ 
+/* ── kW bar ──────────────────────────────────────────────────── */
+.kw-bar-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.kw-bar-lbl { font-size: .72rem; color: #64748B; min-width: 60px; }
+.kw-bar-track { flex: 1; height: 6px; background: rgba(255,255,255,.07); border-radius: 3px; overflow: hidden; }
+.kw-bar-fill  { height: 100%; background: #10B981; border-radius: 3px; transition: width .5s; }
+ 
+/* ── cp bars ─────────────────────────────────────────────────── */
+.cp-bars { display: flex; flex-direction: column; gap: 4px; margin: 4px 0 8px; }
+.cp-bar-track { height: 4px; background: rgba(255,255,255,.07); border-radius: 2px; overflow: hidden; }
+.cp-bar-fill  { height: 100%; background: #3B82F6; border-radius: 2px; transition: width .5s; }
+.cp-row { gap: 20px; }
+ 
+/* ── Status line ─────────────────────────────────────────────── */
+.status-line { font-size: .78rem; margin: 4px 0; color: #94A3B8; }
+.inline-status { font-size: .7rem; }
+ 
+/* ── Hours row ───────────────────────────────────────────────── */
+.hours-row { display: flex; gap: 10px; margin: 12px 0; flex-wrap: wrap; }
+.hours-cell { flex: 1; min-width: 80px; }
+.hours-lbl    { font-size: .65rem; color: #4B5563; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; margin-bottom: 3px; }
+.hours-val    { font-size: 1.1rem; font-weight: 900; font-family: 'JetBrains Mono', monospace; color: #E2E8F0; }
+.hours-val-sm { font-size: .8rem; font-weight: 700; color: #94A3B8; }
+ 
+/* ── Battery bar ─────────────────────────────────────────────── */
+.batt-bar-row { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+.batt-body { width: 60px; height: 18px; border: 2px solid rgba(255,255,255,.15); border-radius: 3px; position: relative; padding: 2px; }
+.batt-body::after { content:''; position:absolute; right:-6px; top:50%; transform:translateY(-50%); width:4px; height:8px; background: rgba(255,255,255,.2); border-radius:0 2px 2px 0; }
+.batt-fill { height: 100%; background: #10B981; border-radius: 1px; transition: width .5s; }
+.batt-status { font-size: .75rem; color: #94A3B8; flex: 1; }
+ 
+/* ── Tank visual ─────────────────────────────────────────────── */
+.tank-visual-row { display: flex; gap: 20px; align-items: center; margin: 14px 0; }
+.tank-outer {
+  width: 56px; height: 110px; border: 2px solid rgba(255,255,255,.15);
+  border-radius: 6px; position: relative; overflow: hidden; background: rgba(0,0,0,.2);
+  flex-shrink: 0;
+}
+.tank-fill-wrap { position: absolute; inset: 0; display: flex; align-items: flex-end; }
+.tank-fill { width: 100%; background: linear-gradient(180deg, #34D399, #10B981); border-radius: 0 0 4px 4px; transition: height .8s cubic-bezier(.4,0,.2,1); }
+.tank-pct-label { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: .75rem; font-weight: 900; color: #fff; text-shadow: 0 1px 4px rgba(0,0,0,.5); pointer-events: none; }
+.fuel-info-col { flex: 1; }
+.fuel-big-val  { font-size: 1.8rem; font-weight: 900; font-family: 'JetBrains Mono', monospace; color: #34D399; line-height: 1.1; }
+.fuel-big-unit { font-size: .72rem; color: #4B5563; margin-bottom: 8px; }
+.fuel-sub-row  { display: flex; gap: 12px; font-size: .78rem; color: #94A3B8; margin-bottom: 6px; }
+.fuel-burn-row { font-size: .75rem; color: #64748B; display: flex; flex-direction: column; gap: 3px; }
+.fuel-burn-row b { color: #F59E0B; }
+ 
+/* ── Utility freq ────────────────────────────────────────────── */
+.util-freq-row { margin: 12px 0; }
+.util-freq-lbl { font-size: .65rem; color: #4B5563; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; margin-bottom: 4px; }
+.util-freq-val { font-size: 1.5rem; font-weight: 900; font-family: 'JetBrains Mono', monospace; color: #E2E8F0; line-height: 1.1; }
+.util-freq-unit { font-size: .9rem; color: #64748B; }
+.util-freq-status { font-size: .78rem; margin-top: 4px; color: #94A3B8; }
+ 
+/* ── AMF / Transfer chips ────────────────────────────────────── */
+.amf-chip, .xfer-chip {
+  display: inline-block; padding: 4px 12px; border-radius: 20px;
+  font-size: .78rem; font-weight: 800;
+  background: rgba(255,255,255,.05); color: #94A3B8;
+  border: 1px solid rgba(255,255,255,.08);
+}
+.amf-action-row { margin-top: 8px; }
+.amf-action {
+  display: inline-block; padding: 5px 14px; border-radius: 20px;
+  font-size: .78rem; font-weight: 800; letter-spacing: .04em;
+  background: rgba(59,130,246,.12); color: #60A5FA;
+  border: 1px solid rgba(59,130,246,.2);
+}
+
+/* ─── HEADER: Mobile Responsive Fix ──────────────────────── */
+.site-header {
+  flex-wrap: wrap;
+  gap: 10px;
+  height: auto;
+  min-height: var(--hdr-h);
+  padding: 10px 16px;
+}
+
+.hdr-brand {
+  flex: 1;
+  min-width: 0;
+}
+
+.hdr-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hdr-right {
+  flex-shrink: 0;
+  gap: 10px;
+}
+
+@media (max-width: 480px) {
+  .site-header {
+    padding: 10px 12px;
+  }
+
+  .hdr-sub {
+    display: none;           /* hides "Cummins 400 kVA · PowerStart…" on tiny screens */
+  }
+
+  .hdr-logo {
+    width: 34px;
+    height: 34px;
+    font-size: 1.1rem;
+  }
+
+  .hdr-title {
+    font-size: 1rem;
+  }
+
+  .conn-badge {
+    padding: 5px 10px;
+    font-size: .70rem;
+  }
+
+  .hdr-clock {
+    font-size: .75rem;
+  }
+}
+
+/* ─── SECTION HEADINGS: Bolder & Better Contrast ─────────── */
+.sec-title {
+  font-size: 1rem;             /* was .88rem */
+  font-weight: 900;            /* was 800 */
+  color: var(--txt1);          /* was txt2 — now darker */
+  letter-spacing: .04em;
+}
+
+.sec-hint {
+  font-size: .72rem;           /* was .70rem */
+  color: var(--txt2);          /* was txt3 — was too faint */
+  background: var(--accent-dim);
+  padding: 3px 10px;
+  border-radius: 20px;
+  margin-left: auto;
+}
+
+/* ─── CARD LABELS: Slightly more readable ─────────────────── */
+.card-label {
+  color: var(--txt2);          /* was txt3 — too grey/faint */
+  font-size: .72rem;           /* was .68rem */
+}
+
+/* ─── Card label heading: brighter ───────────────────────── */
+.card-label {
+  color: var(--txt1);          /* was txt2/txt3 — now full dark */
+  font-size: .74rem;
+  font-weight: 900;
+  letter-spacing: .07em;
+}
+
+/* ─── Card explain text: more readable ───────────────────── */
+.card-explain {
+  color: var(--txt1);          /* was txt2 — too faint */
+  font-size: .72rem;           /* was .68rem */
+  line-height: 1.6;
+  background: var(--surface2);
+  padding: 7px 11px;
+  border-radius: 8px;
+  border-left: 3px solid var(--accent);
+}
+
+/* ─── Hero Bar: Mobile Responsive ────────────────────────── */
+.hero-bar {
+  flex-wrap: wrap;
+  gap: 0;
+  padding: 8px 12px;
+  min-height: unset;
+}
+
+.hero-cell {
+  padding: 8px 12px;
+  min-width: 90px;
+}
+
+.hero-sep {
+  display: none; /* hide separators when wrapped */
+}
+
+.hero-lbl {
+  font-size: .58rem;
+}
+
+.hero-val {
+  font-size: .88rem;
+}
+
+@media (max-width: 768px) {
+  .hero-bar {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0;
+    padding: 6px 10px;
+  }
+
+  .hero-sep { display: none; }
+
+  .hero-cell {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+  }
+
+  .hero-cell:nth-child(3n) {
+    border-right: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .hero-bar {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .hero-cell:nth-child(3n) {
+    border-right: 1px solid var(--border);
+  }
+
+  .hero-cell:nth-child(2n) {
+    border-right: none;
+  }
+
+  .hero-lbl {
+    font-size: .55rem;
+  }
+
+  .hero-val {
+    font-size: .82rem;
+  }
+
+  .fuel-bar-bg {
+    width: 50px;
+  }
+}
+
+
+/* ════════════════════════════════════════════════════════════
+   CSS ADDITIONS — Append to end of style.css
+   All selectors are new — no existing rules are changed
+   ════════════════════════════════════════════════════════════ */
+
+
+/* ── A. INFO BAR ─────────────────────────────────────────── */
+.info-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0;
+  padding: 6px 28px;
+  background: linear-gradient(135deg, rgba(37,99,235,.04), rgba(124,58,237,.04));
+  border-bottom: 1.5px solid var(--border);
+  font-size: .72rem;
+  min-height: 36px;
+  overflow-x: auto;
+}
+.ib-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 14px;
+  flex-shrink: 0;
+}
+.ib-sep {
+  width: 1px;
+  height: 20px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+.ib-lbl {
+  font-size: .60rem;
+  font-weight: 800;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: var(--txt3);
+  white-space: nowrap;
+}
+.ib-val {
+  font-family: var(--mono);
+  font-size: .78rem;
+  font-weight: 700;
+  color: var(--txt1);
+  white-space: nowrap;
+}
+.ib-badge {
+  padding: 2px 9px;
+  border-radius: 10px;
+  font-size: .70rem;
+  font-weight: 800;
+  border: 1.5px solid var(--border2);
+  background: var(--surface2);
+}
+.ib-badge.ok    { background: var(--green-light);  border-color: var(--green);  color: var(--green); }
+.ib-badge.warn  { background: var(--amber-light);  border-color: var(--amber);  color: var(--amber); }
+.ib-badge.crit  { background: var(--red-light);    border-color: var(--red);    color: var(--red); }
+.ib-badge.pass  { background: var(--green-light);  border-color: var(--green);  color: var(--green); }
+.ib-badge.fail  { background: var(--red-light);    border-color: var(--red);    color: var(--red); }
+
+@media (max-width: 768px) {
+  .info-bar {
+    padding: 6px 12px;
+    gap: 0;
+  }
+  .ib-sep { display: none; }
+  .ib-item {
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--border);
+    width: 50%;
+  }
+  .info-bar {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 400px) {
+  .info-bar {
+    grid-template-columns: 1fr;
+  }
+  .ib-item { width: 100%; }
+}
+
+
+/* ── B. POWER QUALITY CARD ───────────────────────────────── */
+.pq-card {
+  min-width: 260px;
+}
+.pq-row {
+  margin-bottom: 14px;
+}
+.pq-label {
+  font-size: .66rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--txt3);
+  margin-bottom: 6px;
+}
+.pq-meter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pq-track {
+  flex: 1;
+  height: 8px;
+  background: var(--border);
+  border-radius: 4px;
+  overflow: visible;
+  position: relative;
+}
+.pq-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width .6s ease, background .4s;
+  max-width: 100%;
+}
+/* voltage fill colour changes with severity */
+.pq-v { background: var(--green); }
+.pq-v.warn { background: var(--amber); }
+.pq-v.crit { background: var(--red); }
+.pq-c { background: var(--accent); }
+.pq-c.warn { background: var(--amber); }
+.pq-c.crit { background: var(--red); }
+
+/* NEMA limit marker line */
+.pq-limit {
+  position: absolute;
+  top: -3px;
+  width: 2px;
+  height: 14px;
+  background: var(--red);
+  border-radius: 1px;
+  opacity: .6;
+}
+.pq-val  { font-size: .92rem; font-weight: 800; color: var(--txt1); min-width: 34px; text-align: right; }
+.pq-unit { font-size: .65rem; color: var(--txt3); }
+.pq-status {
+  font-size: .68rem;
+  font-weight: 700;
+  margin-top: 4px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--surface2);
+  border-left: 3px solid var(--border2);
+  transition: all .3s;
+}
+.pq-status.ok   { color: var(--green);  background: var(--green-light);  border-color: var(--green); }
+.pq-status.warn { color: var(--amber);  background: var(--amber-light);  border-color: var(--amber); }
+.pq-status.crit { color: var(--red);    background: var(--red-light);    border-color: var(--red); }
+
+/* PF lead/lag indicator */
+.pq-leadlag {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--surface2);
+  border-radius: 8px;
+  border: 1.5px solid var(--border);
+}
+.ll-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--border2);
+  flex-shrink: 0;
+  transition: background .3s;
+}
+.ll-dot.lagging { background: var(--amber); box-shadow: 0 0 6px rgba(217,119,6,.4); }
+.ll-dot.leading { background: var(--accent); box-shadow: 0 0 6px rgba(37,99,235,.4); }
+.ll-dot.unity   { background: var(--green);  box-shadow: 0 0 6px rgba(5,150,105,.4); }
+.ll-text { font-size: .80rem; font-weight: 800; color: var(--txt1); }
+
+
+/* ── C. OUTPUT STATUS CARD ───────────────────────────────── */
+.output-card { min-width: 220px; }
+.out-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.out-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px dashed var(--border);
+}
+.out-row:last-child { border-bottom: none; }
+.out-label {
+  font-size: .68rem;
+  font-weight: 700;
+  color: var(--txt2);
+  flex: 1;
+}
+.out-chip {
+  font-size: .68rem;
+  font-weight: 800;
+  padding: 3px 10px;
+  border-radius: 10px;
+  border: 1.5px solid var(--border2);
+  background: var(--surface2);
+  color: var(--txt3);
+  transition: all .3s;
+  white-space: nowrap;
+}
+.out-chip.active    { background: var(--red-light);   border-color: var(--red);   color: var(--red);   }
+.out-chip.inactive  { background: var(--green-light); border-color: var(--green); color: var(--green); }
+.out-chip.warn      { background: var(--amber-light); border-color: var(--amber); color: var(--amber); }
+.out-chip.info      { background: var(--accent-dim);  border-color: var(--accent); color: var(--accent); }
+
+/* Battery threshold block */
+.batt-thresh-block {
+  border-top: 1.5px solid var(--border);
+  padding-top: 10px;
+  margin-top: 10px;
+}
+.thresh-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.th-lbl  { font-size: .62rem; color: var(--txt3); font-weight: 700; }
+.th-val  { font-size: .82rem; font-weight: 800; color: var(--txt1); }
+.th-u    { font-size: .60rem; color: var(--txt3); margin-right: 6px; }
+
+
+/* ── D. TRANSFER & CRANK LOG CARD ────────────────────────── */
+.tclog-card {
+  overflow: hidden;
+  min-width: 260px;
+}
+.tclog-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.tc-tab {
+  flex: 1;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1.5px solid var(--border2);
+  background: var(--surface2);
+  color: var(--txt3);
+  font-family: var(--font);
+  font-size: .72rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition: all .18s;
+  text-align: center;
+}
+.tc-tab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.tc-tab:hover:not(.active) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.tc-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.tc-head-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 4px;
+  padding: 4px 8px;
+  background: var(--surface2);
+  border-radius: 6px;
+  margin-bottom: 6px;
+  font-size: .60rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--txt3);
+}
+.tc-list {
+  max-height: 180px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.tc-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 4px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  font-size: .68rem;
+  font-family: var(--mono);
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  transition: border-color .2s;
+}
+.tc-row.pass { border-color: var(--green); background: var(--green-light); }
+.tc-row.fail { border-color: var(--red);   background: var(--red-light); }
+.tc-row.warn { border-color: var(--amber); background: var(--amber-light); }
+.tc-row > span { color: var(--txt2); font-weight: 600; }
+.tc-row.pass > span:last-child { color: var(--green); font-weight: 800; }
+.tc-row.fail > span:last-child { color: var(--red);   font-weight: 800; }
+.tc-row.warn > span:last-child { color: var(--amber); font-weight: 800; }
+.tc-empty {
+  font-size: .72rem;
+  color: var(--txt3);
+  padding: 12px 8px;
+  text-align: center;
+}
+.tc-nfpa-note {
+  font-size: .62rem;
+  color: var(--txt3);
+  margin-top: 8px;
+  padding: 5px 8px;
+  background: var(--surface2);
+  border-radius: 6px;
+  border-left: 3px solid var(--accent);
+}
+
+/* ── D2. Status layout: widen for new cards ─────────────── */
+/* REPLACE your existing .status-layout rule: */
+.status-layout {
+  display: grid;
+  grid-template-columns: 220px 300px 1fr 240px 240px;
+  gap: 16px;
+}
+
+@media (max-width: 1400px) {
+  .status-layout {
+    grid-template-columns: 1fr 1fr 1fr;
+  }
+}
+@media (max-width: 1000px) {
+  .status-layout {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+@media (max-width: 640px) {
+  .status-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+
+/* ── E. RESPONSIVE — INFO BAR on mobile ─────────────────── */
+@media (max-width: 560px) {
+  .info-bar {
+    grid-template-columns: 1fr;
+    padding: 4px 10px;
+  }
+  .ib-item {
+    width: 100%;
+    padding: 5px 4px;
+    justify-content: space-between;
+  }
+}
+
+/* ── F. PQ CARD — responsive ────────────────────────────── */
+@media (max-width: 560px) {
+  .pq-card { min-width: unset; width: 100%; }
+  .pq-meter { flex-wrap: wrap; }
+}
+
+/* ── G. OUTPUT CARD — responsive ────────────────────────── */
+@media (max-width: 560px) {
+  .output-card { min-width: unset; }
+  .thresh-row {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    row-gap: 6px;
+  }
+}
+
+/* ── H. TCLOG CARD — responsive ─────────────────────────── */
+@media (max-width: 560px) {
+  .tclog-card { min-width: unset; }
+  .tc-list { max-height: 140px; }
+  .tc-row { font-size: .62rem; padding: 4px 6px; }
+}
+
+/* ════════════════════════════════════════════════════════════
+   PATCH — append these rules to the END of style.css
+   They override existing rules via higher specificity or
+   later-in-file cascade.
+   ════════════════════════════════════════════════════════════ */
+
+/* ── 1. ALTERNATOR CARD-ROW ────────────────────────────────
+   Each card gets a comfortable 260px minimum so numbers
+   never clip. The grid wraps naturally on smaller screens.  */
+.section .card-row {
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 18px;
+}
+
+/* Chart card spans full row width so it never gets squeezed */
+.card-row .chart-card {
+  grid-column: 1 / -1;          /* full row */
+  min-width: 0;
+}
+
+/* Chart container tall enough to be readable */
+.card-row .chart-card .chart-container {
+  height: 240px;
+}
+
+/* Power totals — comfortable size, won't overflow 260px card */
+.power-total {
+  font-size: 2.4rem;
+  white-space: nowrap;
+}
+
+/* Big numbers (freq, oil pressure, etc.) — no overflow */
+.big-num {
+  font-size: 2.2rem;
+  white-space: nowrap;
+}
+
+/* Phase big row values — shrink text before the row breaks */
+.pb-val {
+  font-size: 1rem;
+  white-space: nowrap;
+}
+
+/* PQ card: no fixed min-width, it will grow with the grid */
+.pq-card {
+  min-width: unset;
+}
+
+/* ── Battery card overflow fix ─────────────────────────────
+   batt-display was a flex row that clipped on narrow cards.
+   Wrap allowed + shrink the battery icon on tight spaces.   */
+.batt-display {
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.batt-body {
+  min-width: 50px;
+  width: 60px;
+}
+
+/* battV big number — prevent it pushing card wider */
+.batt-nums .big-num {
+  font-size: 1.9rem;
+  white-space: nowrap;
+}
+
+/* sub-data rows inside battery card — clip long labels */
+.sub-data {
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.sd-lbl {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 160px;
+}
+
+/* Phase big row: only stack on very tight screens */
+@media (max-width: 360px) {
+  .phase-big-row {
+    flex-direction: column;
+    gap: 6px;
+  }
+}
+
+/* ── 2. STATUS & FAULTS LAYOUT: compact ────────────────────
+   Replace the wide 5-column grid with a tight auto-fill one.
+   Cards get tighter padding, smaller fonts, less margin.     */
+
+.status-layout {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+}
+
+/* Compact padding on ALL cards inside status section */
+.status-layout .card {
+  padding: 12px 14px;
+}
+
+/* Smaller card labels inside status */
+.status-layout .card-label {
+  font-size: .66rem;
+  margin-bottom: 8px;
+}
+
+/* NFPA grid: 2-col, tighter cells */
+.status-layout .nfpa-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.status-layout .nfpa-bit {
+  padding: 3px 6px;
+  font-size: .60rem;
+  border-radius: 4px;
+}
+
+.status-layout .nfpa-bit .nb-dot {
+  width: 5px;
+  height: 5px;
+  flex-shrink: 0;
+}
+
+/* NFPA raw value: smaller */
+.status-layout .nfpa-raw {
+  font-size: .72rem;
+  margin-bottom: 6px;
+}
+
+/* Fault banner: compact */
+.status-layout .fault-banner {
+  padding: 6px 10px;
+  margin-bottom: 8px;
+  gap: 7px;
+}
+.status-layout .fault-icon { font-size: .95rem; }
+.status-layout .fault-text { font-size: .72rem; }
+
+/* Fault meta rows */
+.status-layout .fm-row {
+  gap: 5px;
+}
+.status-layout .fm-lbl { font-size: .60rem; min-width: 48px; }
+.status-layout .fm-val { font-size: .76rem; }
+
+/* Fault queue */
+.status-layout .ft-head { font-size: .58rem; margin-bottom: 4px; }
+.status-layout .ft-item { font-size: .62rem; padding: 3px 7px; }
+.status-layout .ft-empty { font-size: .66rem; }
+.status-layout .fault-table-wrap { margin-bottom: 6px; }
+
+/* Event log: shorter, smaller text */
+.status-layout .event-log {
+  max-height: 200px;
+}
+.status-layout .log-entry {
+  font-size: .62rem;
+  padding: 4px 8px;
+}
+
+/* State card: tighter */
+.status-layout .state-display {
+  margin: 8px 0;
+  gap: 10px;
+}
+.status-layout .state-led {
+  width: 14px;
+  height: 14px;
+}
+.status-layout .state-name {
+  font-size: 1.05rem;
+}
+.status-layout .stype-chip {
+  font-size: .58rem;
+  padding: 2px 7px;
+}
+.status-layout .state-note {
+  font-size: .64rem;
+}
+
+/* TC log: compact */
+.status-layout .tclog-card {
+  min-width: unset;
+}
+.status-layout .tc-tab {
+  font-size: .64rem;
+  padding: 4px 7px;
+}
+.status-layout .tc-row {
+  font-size: .60rem;
+  padding: 4px 6px;
+}
+.status-layout .tc-head-row {
+  font-size: .56rem;
+  padding: 3px 6px;
+}
+.status-layout .tc-list {
+  max-height: 130px;
+}
+.status-layout .tc-nfpa-note {
+  font-size: .58rem;
+  padding: 4px 6px;
+}
+
+/* Output card: compact */
+.status-layout .out-row {
+  padding: 5px 0;
+}
+.status-layout .out-label { font-size: .62rem; }
+.status-layout .out-chip  { font-size: .60rem; padding: 2px 8px; }
+
+/* Battery thresh: compact */
+.status-layout .th-lbl  { font-size: .58rem; }
+.status-layout .th-val  { font-size: .74rem; }
+.status-layout .th-u    { font-size: .56rem; }
+
+/* Responsive breakpoints for status */
+@media (max-width: 1100px) {
+  .status-layout {
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  }
+}
+@media (max-width: 700px) {
+  .status-layout {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+@media (max-width: 480px) {
+  .status-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+
+/* ════════════════════════════════════════════════════════════
+   HOVER HIGHLIGHT SYSTEM
+   — Sections glow blue on hover (whole division)
+   — Individual cards glow on hover too
+   — Smooth transitions throughout
+   ════════════════════════════════════════════════════════════ */
+
+/* ── Section: no hover on outer wrapper ────────────────────
+   Only the individual cards inside get highlighted.         */
+.section {
+  position: relative;
+}
+/* Cancel any inherited section hover effects */
+.section:hover {
+  background:   inherit;
+  border-color: inherit;
+  box-shadow:   inherit;
+}
+.section::before { display: none; }
+
+
+/* ── Card-level hover glow ─────────────────────────────────
+   Every card (clickable or not) gets a subtle blue lift.
+   Clickable cards get a stronger effect.                    */
+.card {
+  transition:
+    border-color 0.20s ease,
+    box-shadow   0.20s ease,
+    transform    0.20s ease,
+    background   0.20s ease;
+}
+
+.card:hover {
+  border-color: rgba(37, 99, 235, 0.35);
+  background:   rgba(37, 99, 235, 0.025);
+  box-shadow:
+    0 0 0 1px rgba(37, 99, 235, 0.10),
+    0 4px 20px rgba(37, 99, 235, 0.10),
+    0 1px 6px  rgba(0, 0, 0, 0.05);
+  transform: translateY(-1px);
+}
+
+/* Clickable cards get a stronger lift + deeper glow */
+.card.clickable:hover {
+  border-color: var(--accent);
+  background:   rgba(37, 99, 235, 0.05);
+  box-shadow:
+    0 0 0 2px rgba(37, 99, 235, 0.15),
+    0 8px 32px rgba(37, 99, 235, 0.15),
+    0 2px 8px  rgba(0, 0, 0, 0.07);
+  transform: translateY(-3px);
+}
+
+/* Cursor on all cards inside a clickable section */
+.section[onclick] .card {
+  cursor: pointer;
+}
+
+/* Click-hint text fully visible on card hover */
+.card:hover .click-hint {
+  opacity: 1;
+  color: var(--accent);
+}
+
+
+/* ── NFPA bits: highlight on hover ─────────────────────────*/
+.nfpa-bit {
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+  cursor: default;
+}
+.nfpa-bit:hover {
+  background:   rgba(37, 99, 235, 0.08) !important;
+  border-color: rgba(37, 99, 235, 0.30) !important;
+  transform: scale(1.03);
+}
+
+
+/* ── TC log rows: highlight on hover ───────────────────────*/
+.tc-row {
+  transition: filter 0.15s ease, transform 0.15s ease;
+  cursor: default;
+}
+.tc-row:hover {
+  filter: brightness(0.94);
+  transform: translateX(3px);
+}
+
+
+/* ── Event log entries: highlight on hover ─────────────────*/
+.log-entry {
+  transition: filter 0.15s ease, padding-left 0.15s ease;
+  cursor: default;
+}
+.log-entry:hover {
+  filter: brightness(0.93);
+  padding-left: 18px;
+}
+
+
+/* ── Hero bar cells: subtle hover ──────────────────────────*/
+.hero-cell {
+  transition: background 0.18s ease;
+  border-radius: 8px;
+}
+.hero-cell:hover {
+  background: rgba(37, 99, 235, 0.06);
+}
+
+
+/* ── Info bar items: subtle hover ──────────────────────────*/
+.ib-item {
+  transition: background 0.18s ease;
+  border-radius: 8px;
+}
+.ib-item:hover {
+  background: rgba(37, 99, 235, 0.07);
+}
+
+
+/* ── Fault banner: pulse on active hover ───────────────────*/
+.fault-banner.active:hover {
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.20);
+  transition: box-shadow 0.2s ease;
+}
+
+
+/* ── Section tag chips: lift on hover ──────────────────────*/
+.sec-tag {
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.section:hover .sec-tag {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.10);
+}
+
+
+/* ── Reduce motion for accessibility ───────────────────────*/
+@media (prefers-reduced-motion: reduce) {
+  .section,
+  .section::before,
+  .card,
+  .nfpa-bit,
+  .tc-row,
+  .log-entry,
+  .hero-cell,
+  .ib-item {
+    transition: none !important;
+    transform: none !important;
+    animation: none !important;
+  }
+}
+
+.site-header {
+  background: #fff;
+  border-bottom: 2px solid #E2E8F5;
+  box-shadow: 0 1px 8px rgba(37,99,235,.08);
+  position: sticky;
+  top: 0;
+  z-index: 200;
+  padding: 0;
+  height: auto;
+  min-height: unset;
+  flex-wrap: unset;
+  display: block;
+}
+
+.hdr-row1 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 18px;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-height: 56px;
+}
+
+.hdr-row2 {
+  display: flex;
+  align-items: center;
+  padding: 5px 11px;
+  gap: 0;
+  background: linear-gradient(135deg, rgba(37,99,235,.03), rgba(124,58,237,.03));
+  border-top: 1px solid #8d95a6;
+  flex-wrap: wrap;
+  overflow-x: auto;
+}
+
+.hdr-brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  flex: 1;
+  min-width: 0;
+}
+
+.hdr-logo {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  flex-shrink: 0;
+  background: linear-gradient(135deg, #05054b, #7C3AED);
+  display: grid;
+  place-items: center;
+  font-size: 1.1rem;
+  box-shadow: 0 3px 8px rgba(37,99,235,.28);
+}
+
+.hdr-title {
+  font-size: 1.1rem;
+  font-weight: 900;
+  letter-spacing: .1em;
+  color: #1E2A3A;
+  white-space: nowrap;
+}
+.hdr-title span { color: #2563EB; }
+
+.hdr-sub {
+  font-size: .59rem;
+  color: #4A5568;
+  letter-spacing: .04em;
+  margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hdr-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+/* ── Clock ── */
+.hdr-clock-wrap {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 10px;
+  border-radius: 10px;
+  background: #F8FAFF;
+  border: 1.5px solid #E2E8F5;
+}
+
+.clock-face {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1.5px solid #C8D5EF;
+  position: relative;
+  background: #fff;
+  flex-shrink: 0;
+}
+
+.clock-hand {
+  position: absolute;
+  bottom: 50%;
+  left: 50%;
+  transform-origin: bottom center;
+  border-radius: 2px;
+}
+.clock-h { width: 2px;   height: 8px;  background: #1A2340; margin-left: -1px; }
+.clock-m { width: 1.5px; height: 11px; background: #1A2340; margin-left: -.75px; }
+.clock-s { width: 1px;   height: 12px; background: #2563EB; margin-left: -.5px; }
+
+.clock-dot {
+  position: absolute;
+  width: 4px; height: 4px;
+  border-radius: 50%;
+  background: #1A2340;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.clock-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+.clock-time {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: .80rem;
+  font-weight: 700;
+  color: #1E2A3A;
+  letter-spacing: .05em;
+}
+.clock-date {
+  font-size: .58rem;
+  color: #4A5568;
+  font-weight: 600;
+}
+
+/* ── Export Button ── */
+.btn-export {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 13px;
+  border-radius: 10px;
+  background: #EFF6FF;
+  border: 1px solid rgba(37,99,235,.3);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: .74rem;
+  font-weight: 800;
+  color: #1D4ED8;
+  transition: all .18s;
+  white-space: nowrap;
+}
+.btn-export:hover  { background: #DBEAFE; border-color: #2563EB; }
+.btn-export:active { transform: scale(.97); }
+
+/* ── Unit Select Button ── */
+.btn-unit {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  background: rgba(37,99,235,.07);
+  border: 1px solid rgba(37,99,235,.22);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: .68rem;
+  font-weight: 800;
+  color: #2563EB;
+  transition: all .18s;
+}
+.btn-unit:hover  { background: rgba(37,99,235,.13); border-color: #2563EB; }
+.btn-unit:active { transform: scale(.97); }
+
+.bu-icon {
+  width: 16px; height: 16px;
+  border-radius: 4px;
+  background: #2563EB;
+  display: grid;
+  place-items: center;
+  font-size: .58rem;
+  color: #fff;
+  flex-shrink: 0;
+}
+.bu-label { display: none; }   /* hide text label, icon-only on small screens */
+
+@media (min-width: 700px) {
+  .bu-label { display: inline; font-size: .68rem; }  /* show label on bigger screens */
+}
+.bu-sub   { display: block; font-size: .57rem; font-weight: 600; color: #4A5568; }
+.bu-badge {
+  background: #059669;
+  color: #fff;
+  font-size: .57rem;
+  font-weight: 900;
+  padding: 2px 6px;
+  border-radius: 20px;
+}
+
+/* ── Status Strip (Row 2) ── */
+.strip-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  font-size: .65rem;
+  flex-shrink: 0;
+  border-right: 1px solid #E2E8F5;
+}
+.strip-item:last-child { border-right: none; }
+.si-lbl {
+  color: #4A5568;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  font-size: .58rem;
+}
+.si-val {
+  color: #1E2A3A;
+  font-weight: 800;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: .72rem;
+}
+
+/* ── Unit Modal ── */
+.unit-modal-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(15,23,42,.42);
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 80px;
+}
+.unit-modal-overlay.open { display: flex; }
+
+.unit-modal-box {
+  background: #fff;
+  border-radius: 18px;
+  border: 1.5px solid #E2E8F5;
+  box-shadow: 0 16px 48px rgba(0,0,0,.16);
+  width: min(400px, 94vw);
+  overflow: hidden;
+  animation: umSlideUp .22s ease;
+}
+@keyframes umSlideUp {
+  from { opacity: 0; transform: translateY(18px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.um-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 18px 12px;
+  background: linear-gradient(135deg, rgba(37,99,235,.05), rgba(124,58,237,.05));
+  border-bottom: 1.5px solid #E2E8F5;
+}
+.um-title { font-size: .92rem; font-weight: 900; color: #1E2A3A; }
+.um-sub   { font-size: .62rem; color: #4A5568; margin-top: 2px; }
+
+.um-close {
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  border: none;
+  background: #F8FAFF;
+  cursor: pointer;
+  font-size: .85rem;
+  color: #4A5568;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  flex-shrink: 0;
+  transition: all .15s;
+}
+.um-close:hover { background: #FEE2E2; color: #DC2626; }
+
+.um-legend {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 18px;
+  border-bottom: 1px dashed #E2E8F5;
+  font-size: .62rem;
+  font-weight: 700;
+  color: #4A5568;
+  flex-wrap: wrap;
+}
+.um-lg-item { display: flex; align-items: center; gap: 5px; }
+.um-lg-dot  { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+.um-list {
+  padding: 10px 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.um-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 11px;
+  border-radius: 11px;
+  cursor: pointer;
+  text-decoration: none;
+  color: inherit;
+  border: 1.5px solid #F0F4FF;
+  background: #F8FAFF;
+  transition: all .15s;
+}
+.um-item:hover {
+  background: #EFF6FF;
+  border-color: rgba(37,99,235,.25);
+  transform: translateY(-1px);
+}
+
+.um-num {
+  width: 28px; height: 28px;
+  border-radius: 7px;
+  flex-shrink: 0;
+  background: #EFF6FF;
+  border: 1.5px solid rgba(37,99,235,.2);
+  display: grid;
+  place-items: center;
+  font-size: .76rem;
+  font-weight: 900;
+  color: #2563EB;
+}
+.um-info  { flex: 1; min-width: 0; }
+.um-name  { font-size: .80rem; font-weight: 800; color: #1E2A3A; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.um-detail{ font-size: .62rem; color: #4A5568; margin-top: 1px; }
+
+.um-status { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; flex-shrink: 0; }
+.um-dot    { width: 8px; height: 8px; border-radius: 50%; }
+.um-lbl    { font-size: .60rem; font-weight: 800; }
+
+.um-status.st-green .um-dot { background: #059669; }
+.um-status.st-green .um-lbl { color: #065F46; }
+.um-status.st-amber .um-dot { background: #D97706; }
+.um-status.st-amber .um-lbl { color: #92400E; }
+.um-status.st-red   .um-dot { background: #DC2626; }
+.um-status.st-red   .um-lbl { color: #991B1B; }
+
+.um-arrow { color: #C8D5EF; font-size: .9rem; flex-shrink: 0; }
+.um-item:hover .um-arrow { color: #2563EB; }
+
+/* ── Mobile Responsive ── */
+@media (max-width: 520px) {
+  .hdr-sub    { display: none; }
+  .bu-sub     { display: none; }
+  .clock-text { display: none; }
+  .strip-item:nth-child(n+5) { display: none; }
+}
+@media (max-width: 400px) {
+  .hdr-row1   { padding: 8px 12px; }
+  .hdr-controls { gap: 5px; }
+  .btn-export, .btn-unit { padding: 6px 9px; }
+  .bu-badge   { display: none; }
+  .exp-lbl    { display: none; }
+}
+
+/* ═══════════════════════════════════════════════════
+   HEADER CONFLICT FIXES — paste at very END of style.css
+═══════════════════════════════════════════════════ */
+
+/* Force the new two-row structure to display correctly */
+.site-header {
+  display: block !important;
+  height: auto !important;
+  min-height: unset !important;
+  padding: 0 !important;
+  flex-wrap: unset !important;
+}
+
+/* Row 1 must be flex */
+.hdr-row1 {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  flex-wrap: nowrap !important;
+  padding: 8px 16px !important;
+  gap: 8px !important;
+  min-height: 52px !important;
+}
+
+/* Brand: never shrink below its content */
+.hdr-brand {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  overflow: hidden !important;
+}
+
+/* Title: never clip — scale down instead */
+.hdr-title {
+  font-size: clamp(.60rem, 2.2vw, 1.1rem) !important;
+  letter-spacing: .06em !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+
+/* Subtitle */
+.hdr-sub {
+  font-size: clamp(.48rem, 1.4vw, .60rem) !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  max-width: 100% !important;
+}
+
+/* Controls row: never wrap, never overflow */
+.hdr-controls {
+  display: flex !important;
+  align-items: center !important;
+  flex-wrap: nowrap !important;
+  flex-shrink: 0 !important;
+  gap: 6px !important;
+}
+
+/* Hide the OLD elements that are conflicting */
+#hdrClock           { display: none !important; }
+/* #connBadge          { display: none !important; } */
+.hdr-right          { display: none !important; }
+
+/* Show the new conn-badge only inside hdr-row2 */
+.hdr-row2 .conn-badge {
+  display: flex !important;
+}
+
+/* Row 2 */
+.hdr-row2 {
+  display: flex !important;
+  align-items: center !important;
+  padding: 4px 1px !important;
+  gap: 0 !important;
+  border-top: 1px solid #E2E8F5 !important;
+  overflow-x: auto !important;
+  flex-wrap: nowrap !important;
+}
+
+/* Clock wrap */
+.hdr-clock-wrap {
+  display: flex !important;
+  align-items: center !important;
+  gap: 7px !important;
+  padding: 5px 10px !important;
+  border-radius: 10px !important;
+  background: #F8FAFF !important;
+  border: 1.5px solid #E2E8F5 !important;
+  flex-shrink: 0 !important;
+}
+
+/* Export button */
+.btn-export {
+  display: flex !important;
+  align-items: center !important;
+  flex-shrink: 0 !important;
+}
+
+/* Unit button */
+.btn-unit {
+  display: flex !important;
+  align-items: center !important;
+  flex-shrink: 0 !important;
+}
+
+/* gs-export-btn (old button) — hide it, new one replaces it */
+.gs-export-btn { display: none !important; }
+
+/* ── Responsive scaling ── */
+@media (max-width: 900px) {
+  .hdr-title { font-size: clamp(.60rem, 2.5vw, .90rem) !important; }
+  .hdr-sub   { font-size: clamp(.46rem, 1.3vw, .55rem) !important; }
+  .hdr-logo  { width: 30px !important; height: 30px !important; font-size: .90rem !important; }
+  .btn-export,
+  .btn-unit  { font-size: .68rem !important; padding: 5px 9px !important; }
+  .clock-face { width: 26px !important; height: 26px !important; }
+  .clock-time { font-size: .70rem !important; }
+  .clock-date { font-size: .52rem !important; }
+}
+
+@media (max-width: 640px) {
+  .hdr-sub    { display: none !important; }
+  .clock-text { display: none !important; }
+  .exp-lbl    { display: none !important; }
+  .bu-sub     { display: none !important; }
+  .btn-export { padding: 6px 8px !important; }
+  .btn-unit   { padding: 6px 8px !important; }
+  .bu-badge   { display: none !important; }
+  .hdr-row1   { padding: 6px 12px !important; }
+  .strip-item:nth-child(n+5) { display: none !important; }
+}
+
+@media (max-width: 420px) {
+  .hdr-title  { font-size: .62rem !important; letter-spacing: .02em !important; }
+  .hdr-logo   { width: 26px !important; height: 26px !important; font-size: .78rem !important; }
+  .clock-face { width: 22px !important; height: 22px !important; }
+  .hdr-row1   { padding: 5px 8px !important; gap: 5px !important; }
+  .hdr-controls { gap: 4px !important; }
+  .strip-item:nth-child(n+3) { display: none !important; }
+  .conn-badge span:not(.conn-dot) { display: none !important; }
+}
+
+/* ═══════════════════════════════════════════════════
+   HEADER CONFLICT FIXES — paste at very END of style.css
+═══════════════════════════════════════════════════ */
+
+/* Force the new two-row structure to display correctly */
+.site-header {
+  display: block !important;
+  height: auto !important;
+  min-height: unset !important;
+  padding: 0 !important;
+  flex-wrap: unset !important;
+}
+
+/* Row 1 must be flex */
+.hdr-row1 {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  flex-wrap: nowrap !important;
+  padding: 8px 16px !important;
+  gap: 8px !important;
+  min-height: 52px !important;
+}
+
+/* Brand: never shrink below its content */
+.hdr-brand {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  overflow: hidden !important;
+}
+
+/* Title: never clip — scale down instead */
+.hdr-title {
+  font-size: clamp(.60rem, 2.2vw, 1.1rem) !important;
+  letter-spacing: .06em !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+
+/* Subtitle */
+.hdr-sub {
+  font-size: clamp(.48rem, 1.4vw, .60rem) !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  max-width: 100% !important;
+}
+
+/* Controls row: never wrap, never overflow */
+.hdr-controls {
+  display: flex !important;
+  align-items: center !important;
+  flex-wrap: nowrap !important;
+  flex-shrink: 0 !important;
+  gap: 6px !important;
+}
+
+/* Hide the OLD elements that are conflicting */
+#hdrClock           { display: none !important; }
+/* #connBadge          { display: none !important; } */
+.hdr-right          { display: none !important; }
+
+/* Show the new conn-badge only inside hdr-row2 */
+.hdr-row2 .conn-badge {
+  display: flex !important;
+}
+
+/* Row 2 */
+.hdr-row2 {
+  display: flex !important;
+  align-items: center !important;
+  padding: 4px 1px !important;
+  gap: 0 !important;
+  border-top: 1px solid #E2E8F5 !important;
+  overflow-x: auto !important;
+  flex-wrap: nowrap !important;
+}
+
+/* Clock wrap */
+.hdr-clock-wrap {
+  display: flex !important;
+  align-items: center !important;
+  gap: 7px !important;
+  padding: 5px 10px !important;
+  border-radius: 10px !important;
+  background: #F8FAFF !important;
+  border: 1.5px solid #E2E8F5 !important;
+  flex-shrink: 0 !important;
+}
+
+/* Export button */
+.btn-export {
+  display: flex !important;
+  align-items: center !important;
+  flex-shrink: 0 !important;
+}
+
+/* Unit button */
+.btn-unit {
+  display: flex !important;
+  align-items: center !important;
+  flex-shrink: 0 !important;
+}
+
+/* gs-export-btn (old button) — hide it, new one replaces it */
+.gs-export-btn { display: none !important; }
+
+/* ── Responsive scaling ── */
+@media (max-width: 900px) {
+  .hdr-title { font-size: clamp(.60rem, 2.5vw, .90rem) !important; }
+  .hdr-sub   { font-size: clamp(.46rem, 1.3vw, .55rem) !important; }
+  .hdr-logo  { width: 30px !important; height: 30px !important; font-size: .90rem !important; }
+  .btn-export,
+  .btn-unit  { font-size: .68rem !important; padding: 5px 9px !important; }
+  .clock-face { width: 26px !important; height: 26px !important; }
+  .clock-time { font-size: .70rem !important; }
+  .clock-date { font-size: .52rem !important; }
+}
+
+@media (max-width: 640px) {
+  .hdr-sub    { display: none !important; }
+  .clock-text { display: none !important; }
+  .exp-lbl    { display: none !important; }
+  .bu-sub     { display: none !important; }
+  .btn-export { padding: 6px 8px !important; }
+  .btn-unit   { padding: 6px 8px !important; }
+  .bu-badge   { display: none !important; }
+  .hdr-row1   { padding: 6px 12px !important; }
+  .strip-item:nth-child(n+5) { display: none !important; }
+}
+
+@media (max-width: 420px) {
+  .hdr-title  { font-size: .62rem !important; letter-spacing: .02em !important; }
+  .hdr-logo   { width: 26px !important; height: 26px !important; font-size: .78rem !important; }
+  .clock-face { width: 22px !important; height: 22px !important; }
+  .hdr-row1   { padding: 5px 8px !important; gap: 5px !important; }
+  .hdr-controls { gap: 4px !important; }
+  .strip-item:nth-child(n+3) { display: none !important; }
+  .conn-badge span:not(.conn-dot) { display: none !important; }
+}
+
+/* ═══════════════════════════════════════════════════
+   LIVE BADGE FIX — paste at very END of style.css
+═══════════════════════════════════════════════════ */
+
+/* Restore the new live badge inside row 2 */
+.hdr-row2 .conn-badge {
+  display: flex !important;
+  align-items: center !important;
+  gap: 3px !important;
+  padding: 3px 2px !important;
+  border-radius: 20px !important;
+  background: rgba(5,150,105,.08) !important;
+  border: 1.5px solid #059669 !important;
+  font-size: .70rem !important;
+  font-weight: 700 !important;
+  color: #059669 !important;
+  margin-right: 8px !important;
+  flex-shrink: 0 !important;
+}
+
+.hdr-row2 .conn-dot {
+  display: block !important;
+  width: 7px !important;
+  height: 7px !important;
+  border-radius: 50% !important;
+  background: #059669 !important;
+  animation: pulse 2s infinite !important;
+}
+
+.hdr-row2 #connLabel {
+  display: inline !important;
+}
+
+.sec-head {
+  cursor: pointer;
+  padding: 8px 10px;
+  border-radius: 10px;
+  transition: background 0.18s;
+}
+.sec-head:hover {
+  background: rgba(37, 99, 235, 0.07);
+}
+
+@font-face {
+  font-family: 'Nunito';
+  font-style: normal;
+  font-weight: 700 900;
+  font-display: swap;
+  size-adjust: 105%;
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  size-adjust: 98%;
+}
+
+/* ── Prevent layout shift on load ── */
+.card {
+  contain: layout style;
+}
+
+.card-row {
+  min-height: 280px; /* reserve space before cards paint */
+}
+
+.hero-bar {
+  min-height: 62px;
+  contain: layout;
+}
+
+.site-header {
+  contain: layout style;
+}
+
+/* Prevent gauge canvas shift */
+/* canvas {
+  display: block;
+  width: 160px !important;
+  height: 160px !important;
+} */
+
+/* Reserve space for sec-title (LCP element) */
+.sec-title {
+  min-height: 1.2em;
+  display: inline-block;
+}
+
+/* Fix chart canvases — must come AFTER the canvas { 160px } rule */
+#trendChart,
+#fuelChart {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.chart-container {
+  position: relative;
+  height: 240px !important;
+  width: 100% !important;
+}
+
+/* Fuel chart container already has inline height:200px — respect it */
+.card .chart-container {
+  height: 240px !important;
+}
+
+/* Detail overlay chart wrappers */
+.gsd-chart-wrap {
+  position: relative;
+  height: 240px !important;
+  width: 100% !important;
+}
+
+.gsd-chart-wrap.tall {
+  height: 300px !important;
+}
+
+/* All chart canvases inside containers must fill their parent */
+.chart-container canvas,
+.gsd-chart-wrap canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* ── Fuel gauges responsive ── */
+@media (max-width: 900px) {
+  .fuel-dial-row { grid-template-columns: 1fr 1fr !important; }
+  .fuel-dial-row > div:last-child { grid-column: 1 / -1; }
+}
+@media (max-width: 600px) {
+  .fuel-dial-row { grid-template-columns: 1fr !important; }
+  .fuel-dial-row > div:last-child { grid-column: unset; }
+  .fuel-bot-row  { grid-template-columns: 1fr !important; }
+}
+
+/* ═══════════════════════════════════════════════════
+   FUEL DETAIL OVERLAY — Professional Full-Width Layout
+═══════════════════════════════════════════════════ */
+
+/* Stats row: full width, no wrapping */
+.gsd-stats-row {
+  display: block !important;
+  padding: 20px 28px !important;
+  width: 100% !important;
+}
+
+/* The fuel detail wrapper fills full width */
+.gsd-stats-row > div[style] {
+  width: 100% !important;
+  max-width: 100% !important;
+  box-sizing: border-box !important;
+}
+
+/* ── Dial row: 3 equal columns, proper sizing ── */
+.fuel-dial-row {
+  display: grid !important;
+  grid-template-columns: repeat(3, 1fr) !important;
+  gap: 20px !important;
+  width: 100% !important;
+  margin-bottom: 20px !important;
+}
+
+/* Each dial card fills its column */
+.fuel-dial-row > div {
+  width: 100% !important;
+  min-width: 0 !important;
+  box-sizing: border-box !important;
+}
+
+/* SVG dial: responsive, fills card */
+.fuel-dial-row svg {
+  width: 100% !important;
+  max-width: 200px !important;
+  height: auto !important;
+  display: block !important;
+  margin: 0 auto !important;
+}
+
+/* Dial text sizes: scale up for larger cards */
+.fuel-dial-row text[font-size="21"] {
+  font-size: 26px !important;
+}
+.fuel-dial-row text[font-size="11"] {
+  font-size: 13px !important;
+}
+.fuel-dial-row text[font-size="10"] {
+  font-size: 12px !important;
+}
+
+/* ── Bottom row: 2 equal columns ── */
+.fuel-bot-row {
+  display: grid !important;
+  grid-template-columns: 1fr 1fr !important;
+  gap: 20px !important;
+  width: 100% !important;
+}
+
+.fuel-bot-row > div {
+  width: 100% !important;
+  min-width: 0 !important;
+  box-sizing: border-box !important;
+}
+
+/* Runtime estimate big number */
+.fuel-bot-row [style*="font-size:40px"] {
+  font-size: 56px !important;
+}
+
+/* Charts area: full width */
+.gsd-charts-area {
+  padding: 0 28px 80px !important;
+  width: 100% !important;
+}
+
+.gsd-chart-panel {
+  width: 100% !important;
+  box-sizing: border-box !important;
+}
+
+/* ── Responsive: tablet ── */
+@media (max-width: 900px) {
+  .fuel-dial-row {
+    grid-template-columns: repeat(3, 1fr) !important;
+    gap: 12px !important;
+  }
+  .fuel-bot-row {
+    grid-template-columns: 1fr !important;
+  }
+  .gsd-stats-row {
+    padding: 16px !important;
+  }
+  .gsd-charts-area {
+    padding: 0 16px 60px !important;
+  }
+}
+
+/* ── Responsive: mobile ── */
+@media (max-width: 600px) {
+  .fuel-dial-row {
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+  }
+  .fuel-bot-row {
+    grid-template-columns: 1fr !important;
+  }
+  .gsd-stats-row {
+    padding: 12px !important;
+  }
+}
+
+/* ── Non-fuel sections: keep card grid ── */
+.gsd-stats-row:not(:has(> div[style])) {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)) !important;
+}
+
+.state-chip.stopped {
+  background: linear-gradient(135deg, #4C1D95, #5B21B6);
+  color: #DDD6FE;
+  border: 1.5px solid #7C3AED;
+  box-shadow: 0 0 8px rgba(124,58,237,.3);
+}
+
+/* ── Unit Splash (full-page landing) ── */
+.unit-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg, #0f172a);
+  overflow-y: auto;
+}
+
+.unit-splash-box {
+  width: 100%;
+  max-width: 560px;
+  padding: 32px 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.us-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+}
+
+.us-logo {
+  font-size: 2.8rem;
+}
+
+.us-title {
+  font-family: 'Nunito', sans-serif;
+  font-size: 2rem;
+  font-weight: 900;
+  letter-spacing: 2px;
+  color: var(--text, #f1f5f9);
+}
+
+.us-title span {
+  color: #2563eb;
+}
+
+.us-sub {
+  font-size: 0.85rem;
+  color: var(--text-muted, #94a3b8);
+}
+
+.us-footer {
+  text-align: center;
+  font-size: 0.75rem;
+  color: var(--text-muted, #64748b);
+  padding-top: 8px;
+  border-top: 1px solid var(--border, #1e293b);
+}
+/* ════════════════════════════════════════════════════════════
+   FUEL SECTION REDESIGN — append to end of style.css
+   ════════════════════════════════════════════════════════════ */
+
+/* ── TANK CAPACITY constant update ── */
+/* In app.js change TANK_CAPACITY from 715 to 780 */
+
+/* ── Session Summary Strip ─────────────────────────────── */
+.fuel-session-strip {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  background: var(--bg2);
+  border: 1.5px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 14px 20px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+  box-shadow: var(--shadow);
+}
+
+.fss-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 16px;
+  flex: 1;
+  min-width: 130px;
+}
+
+.fss-icon {
+  font-size: 1.4rem;
+  flex-shrink: 0;
+}
+
+.fss-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.fss-label {
+  font-size: .62rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--txt3);
+}
+
+.fss-value {
+  font-size: 1.2rem;
+  font-weight: 800;
+  color: var(--txt1);
+  line-height: 1;
+}
+
+.fss-value.green { color: var(--green); }
+.fss-value.amber { color: var(--amber); }
+.fss-value.red   { color: var(--red); }
+
+.fss-sub {
+  font-size: .68rem;
+  color: var(--txt3);
+  font-weight: 600;
+}
+
+.fss-arrow {
+  font-size: 1.2rem;
+  color: var(--border2);
+  flex-shrink: 0;
+  padding: 0 4px;
+}
+
+.fss-sep {
+  width: 1.5px;
+  height: 50px;
+  background: var(--border);
+  margin: 0 10px;
+  flex-shrink: 0;
+}
+
+@media (max-width: 900px) {
+  .fuel-session-strip {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0;
+  }
+  .fss-arrow, .fss-sep { display: none; }
+  .fss-cell {
+    padding: 10px 12px;
+    border-bottom: 1px dashed var(--border);
+  }
+}
+
+@media (max-width: 480px) {
+  .fuel-session-strip {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Fuel Detail Card Row ──────────────────────────────── */
+.fuel-detail-row {
+  grid-template-columns: 1fr 1fr 1fr 1fr !important;
+}
+
+@media (max-width: 1400px) {
+  .fuel-detail-row {
+    grid-template-columns: 1fr 1fr !important;
+  }
+}
+
+@media (max-width: 768px) {
+  .fuel-detail-row {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* ── Fuel Explain Box ──────────────────────────────────── */
+.fuel-explain-box {
+  background: rgba(37,99,235,.05);
+  border: 1.5px solid rgba(37,99,235,.15);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: .72rem;
+  color: var(--txt2);
+  line-height: 1.6;
+  margin-bottom: 14px;
+}
+
+.fuel-explain-box strong {
+  color: var(--accent);
+}
+
+/* ── 3D Tank Visual ────────────────────────────────────── */
+.tank-viz-row {
+  display: flex;
+  gap: 18px;
+  align-items: flex-start;
+  margin-bottom: 14px;
+}
+
+.tank-3d {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  flex-shrink: 0;
+}
+
+.tank-3d-body {
+  width: 70px;
+  height: 140px;
+  border: 2.5px solid var(--border2);
+  border-radius: 6px 6px 10px 10px;
+  position: relative;
+  overflow: hidden;
+  background: var(--surface2);
+  box-shadow: inset 0 2px 10px rgba(0,0,0,.07), inset -3px 0 8px rgba(0,0,0,.04);
+}
+
+.tank-3d-fill {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  background: linear-gradient(to top, #059669, rgba(52,211,153,.5));
+  transition: height 1s cubic-bezier(.4,0,.2,1);
+}
+
+.tank-3d-surface {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 6px;
+  background: rgba(52,211,153,.6);
+  border-radius: 2px;
+}
+
+.tank-3d-pct {
+  position: absolute;
+  top: 8px; left: 0; right: 0;
+  text-align: center;
+  font-size: .82rem;
+  font-weight: 900;
+  color: var(--txt1);
+  z-index: 2;
+  text-shadow: 0 1px 3px rgba(255,255,255,.8);
+}
+
+.tank-3d-litres {
+  position: absolute;
+  bottom: 8px; left: 0; right: 0;
+  text-align: center;
+  font-size: .62rem;
+  font-weight: 800;
+  color: var(--txt1);
+  z-index: 2;
+  font-family: var(--mono);
+  text-shadow: 0 1px 3px rgba(255,255,255,.8);
+}
+
+.tank-3d-markers {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  height: 140px;
+  position: relative;
+}
+
+.tank-marker {
+  position: absolute;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  transform: translateY(50%);
+}
+
+.tank-marker span:first-child {
+  font-size: .58rem;
+  font-weight: 800;
+  color: var(--txt3);
+}
+
+.tank-marker span:last-child {
+  font-size: .55rem;
+  color: var(--txt3);
+  font-family: var(--mono);
+}
+
+.tank-marker.warn span { color: var(--amber); }
+.tank-marker.danger span { color: var(--red); }
+
+/* ── Tank Stats Column ─────────────────────────────────── */
+.tank-stats-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tsc-item {
+  padding: 8px 12px;
+  background: var(--surface2);
+  border-radius: 10px;
+  border: 1px solid var(--border);
+}
+
+.tsc-label {
+  font-size: .62rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--txt3);
+  margin-bottom: 2px;
+}
+
+.tsc-val {
+  font-size: 1.3rem;
+  font-weight: 800;
+  color: var(--txt1);
+  line-height: 1;
+}
+
+.tsc-val.green { color: var(--green); }
+.tsc-val.amber { color: var(--amber); }
+
+.tsc-unit {
+  font-size: .60rem;
+  color: var(--txt3);
+  margin-top: 2px;
+}
+
+.tsc-status-badge {
+  padding: 6px 12px;
+  border-radius: 10px;
+  font-size: .72rem;
+  font-weight: 800;
+  text-align: center;
+  border: 1.5px solid var(--border2);
+  background: var(--surface2);
+  transition: all .3s;
+}
+
+.tsc-status-badge.ok     { background: var(--green-light);  border-color: var(--green);  color: var(--green); }
+.tsc-status-badge.warn   { background: var(--amber-light);  border-color: var(--amber);  color: var(--amber); }
+.tsc-status-badge.danger { background: var(--red-light);    border-color: var(--red);    color: var(--red); }
+
+/* ── Tank Level Bar ────────────────────────────────────── */
+.tank-level-bar {
+  position: relative;
+  height: 12px;
+  background: var(--border);
+  border-radius: 6px;
+  overflow: visible;
+  margin-top: 8px;
+}
+
+.tlb-fill {
+  height: 100%;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--green), #34D399);
+  transition: width 1s ease;
+}
+
+.tlb-markers {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  pointer-events: none;
+}
+
+.tlb-mark {
+  position: absolute;
+  top: -22px;
+  transform: translateX(-50%);
+  font-size: .56rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.tlb-mark.danger { color: var(--red); }
+.tlb-mark.warn   { color: var(--amber); }
+.tlb-mark.ok     { color: var(--green); }
+
+/* ── Burn Rate Display ─────────────────────────────────── */
+.burn-rate-display {
+  display: flex;
+  gap: 12px;
+  align-items: stretch;
+  margin-bottom: 16px;
+}
+
+.brd-main {
+  flex: 1;
+  background: var(--surface2);
+  border-radius: 12px;
+  border: 1.5px solid var(--border);
+  padding: 14px 16px;
+  text-align: center;
+}
+
+.brd-val {
+  font-size: 2.8rem;
+  font-weight: 800;
+  color: var(--txt1);
+  line-height: 1;
+}
+
+.brd-unit {
+  font-size: .72rem;
+  color: var(--txt3);
+  font-weight: 600;
+  margin-top: 4px;
+}
+
+.brd-label {
+  font-size: .62rem;
+  color: var(--txt3);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  margin-top: 4px;
+}
+
+.brd-vs {
+  flex: 1;
+  background: var(--surface2);
+  border-radius: 12px;
+  border: 1.5px solid var(--border);
+  padding: 14px 16px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  justify-content: center;
+}
+
+.brd-expected-label {
+  font-size: .60rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--txt3);
+}
+
+.brd-expected {
+  font-size: 1.8rem;
+  font-weight: 800;
+  color: var(--accent);
+  line-height: 1;
+}
+
+.brd-expected-unit {
+  font-size: .68rem;
+  color: var(--txt3);
+}
+
+.brd-status {
+  font-size: .70rem;
+  font-weight: 800;
+  margin-top: 4px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: var(--surface2);
+}
+
+.brd-status.ok     { color: var(--green);  background: var(--green-light); }
+.brd-status.warn   { color: var(--amber);  background: var(--amber-light); }
+.brd-status.danger { color: var(--red);    background: var(--red-light); }
+
+/* ── Load vs Burn Table ────────────────────────────────── */
+.load-burn-table {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.lbt-head {
+  display: grid;
+  grid-template-columns: 110px 90px 1fr;
+  gap: 8px;
+  padding: 5px 10px;
+  background: var(--surface2);
+  border-radius: 6px;
+  font-size: .60rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--txt3);
+}
+
+.lbt-row {
+  display: grid;
+  grid-template-columns: 110px 90px 1fr;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1.5px solid var(--border);
+  background: var(--surface2);
+  transition: all .2s;
+}
+
+.lbt-row.active-row {
+  border-color: var(--accent);
+  background: rgba(37,99,235,.06);
+  box-shadow: 0 0 0 1px rgba(37,99,235,.1);
+}
+
+.lbt-load {
+  font-size: .70rem;
+  font-weight: 800;
+  color: var(--txt2);
+}
+
+.lbt-row.active-row .lbt-load {
+  color: var(--accent);
+}
+
+.lbt-burn {
+  font-size: .72rem;
+  font-weight: 700;
+  color: var(--txt1);
+}
+
+.lbt-note {
+  font-size: .65rem;
+  color: var(--txt3);
+}
+
+/* ── Runtime Card ──────────────────────────────────────── */
+.runtime-big {
+  text-align: center;
+  padding: 20px 10px;
+  background: var(--surface2);
+  border-radius: 12px;
+  border: 1.5px solid var(--border);
+  margin-bottom: 14px;
+}
+
+.rtb-number {
+  font-size: 4rem;
+  font-weight: 800;
+  color: var(--accent);
+  line-height: 1;
+}
+
+.rtb-label {
+  font-size: .78rem;
+  color: var(--txt3);
+  font-weight: 600;
+  margin-top: 4px;
+}
+
+.rtb-sub {
+  font-size: .65rem;
+  color: var(--txt3);
+  margin-top: 2px;
+}
+
+.runtime-breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.rbd-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+}
+
+.rbd-row.highlight {
+  border-color: rgba(37,99,235,.2);
+  background: rgba(37,99,235,.04);
+}
+
+.rbd-lbl {
+  font-size: .68rem;
+  font-weight: 700;
+  color: var(--txt2);
+  flex: 1;
+}
+
+.rbd-val {
+  font-size: .88rem;
+  font-weight: 800;
+  color: var(--txt1);
+}
+
+.rbd-unit {
+  font-size: .60rem;
+  color: var(--txt3);
+  min-width: 70px;
+  text-align: right;
+}
+
+.refuel-alert {
+  padding: 10px 14px;
+  background: var(--red-light);
+  border: 1.5px solid var(--red);
+  border-radius: 10px;
+  font-size: .75rem;
+  font-weight: 700;
+  color: var(--red);
+}
+
+.refuel-warn {
+  padding: 10px 14px;
+  background: var(--amber-light);
+  border: 1.5px solid var(--amber);
+  border-radius: 10px;
+  font-size: .75rem;
+  font-weight: 700;
+  color: var(--amber);
+}
+
+/* ── Fuel Chart Card ───────────────────────────────────── */
+.fuel-chart-card {
+  grid-column: 1 / -1;
+}
+
+.fuel-chart-legend {
+  display: flex;
+  gap: 16px;
+  margin-top: 8px;
+}
+
+.fcl-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: .68rem;
+  color: var(--txt3);
+  font-weight: 600;
+}
+
+.fcl-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.fcl-dot.green { background: var(--green); }
+.fcl-dot.blue  { background: var(--accent); }
+
+/* ════════════════════════════════════════════════════════════
+   FUEL DETAIL OVERLAY OVERRIDES — append to END of style.css
+   ════════════════════════════════════════════════════════════ */
+
+/* Stats row for fuel detail: full width, no grid */
+.gsd-stats-row {
+  display: block !important;
+  padding: 0 28px 20px !important;
+  width: 100% !important;
+}
+
+/* The fuel detail HTML fills full width */
+.gsd-stats-row > div {
+  width: 100% !important;
+  max-width: 100% !important;
+  box-sizing: border-box !important;
+}
+
+/* Fuel detail inner 2-column grids → stack on tablet */
+@media (max-width: 900px) {
+  .gsd-stats-row > div > div[style*="grid-template-columns:1fr 1fr"] {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* OEM table inside detail: shrink gracefully */
+@media (max-width: 700px) {
+  .gsd-stats-row [style*="grid-template-columns:60px 80px 80px 1fr"] {
+    grid-template-columns: 55px 70px 70px 1fr !important;
+    font-size: 10px !important;
+    gap: 4px !important;
+  }
+}
+
+@media (max-width: 500px) {
+  .gsd-stats-row [style*="grid-template-columns:60px 80px 80px 1fr"] {
+    grid-template-columns: 1fr 1fr !important;
+  }
+  /* Hide note column on very small screens */
+  .gsd-stats-row [style*="grid-template-columns:60px 80px 80px 1fr"] > span:last-child {
+    display: none !important;
+  }
+}
+
+/* Runtime big number: responsive */
+@media (max-width: 600px) {
+  .gsd-stats-row [style*="font-size:64px"] {
+    font-size: 44px !important;
+  }
+}
+
+/* Snap grid stats cards */
+@media (max-width: 600px) {
+  .gsd-stats-row [style*="repeat(auto-fill,minmax(150px,1fr))"] {
+    grid-template-columns: 1fr 1fr !important;
+  }
+}
+
+/* Charts area padding on mobile */
+@media (max-width: 600px) {
+  .gsd-charts-area {
+    padding: 0 14px 60px !important;
+  }
+  .gsd-stats-row {
+    padding: 0 14px 16px !important;
+  }
+}
+
+/* Chart titles in fuel section: explain what the chart means */
+.gsd-chart-title {
+  font-size: .88rem !important;
+  font-weight: 900 !important;
+  color: #1A2340 !important;
+  line-height: 1.4 !important;
+}
+/* ════════════════════════════════════════════════════════════
+   TANK LEVEL CARD — COMPLETE LAYOUT FIX
+   Append to END of style.css (replaces/overrides old tank rules)
+   ════════════════════════════════════════════════════════════ */
+
+/* ── Tank viz row: tank left, stats right, NO overlap ───── */
+.tank-viz-row {
+  display: flex !important;
+  flex-direction: row !important;
+  gap: 24px !important;
+  align-items: flex-start !important;
+  margin-bottom: 18px !important;
+  width: 100% !important;
+}
+
+/* ── Tank 3D wrapper: fixed width, no shrink ────────────── */
+.tank-3d {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: flex-end !important;
+  gap: 10px !important;
+  flex-shrink: 0 !important;
+  width: 110px !important;
+}
+
+/* ── Tank body: taller, fixed size ─────────────────────── */
+.tank-3d-body {
+  width: 72px !important;
+  height: 160px !important;
+  border: 2.5px solid var(--border2) !important;
+  border-radius: 6px 6px 10px 10px !important;
+  position: relative !important;
+  overflow: hidden !important;
+  background: var(--surface2) !important;
+  flex-shrink: 0 !important;
+}
+
+/* ── Markers column: fixed, right of tank body ──────────── */
+.tank-3d-markers {
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: space-between !important;
+  height: 160px !important;
+  width: 36px !important;
+  flex-shrink: 0 !important;
+  position: relative !important;
+  padding: 0 !important;
+}
+
+/* ── Each marker: absolute positioned correctly ─────────── */
+.tank-marker {
+  position: absolute !important;
+  left: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: flex-start !important;
+  transform: translateY(50%) !important;
+  white-space: nowrap !important;
+  line-height: 1.2 !important;
+}
+
+.tank-marker span:first-child {
+  font-size: .60rem !important;
+  font-weight: 800 !important;
+  color: var(--txt3) !important;
+  line-height: 1.1 !important;
+}
+
+.tank-marker span:last-child {
+  font-size: .55rem !important;
+  color: var(--txt3) !important;
+  font-family: var(--mono) !important;
+  line-height: 1.1 !important;
+}
+
+.tank-marker.warn span  { color: var(--amber) !important; }
+.tank-marker.danger span{ color: var(--red)   !important; }
+
+/* ── Stats column: takes remaining width ────────────────── */
+.tank-stats-col {
+  flex: 1 !important;
+  min-width: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 8px !important;
+}
+
+/* ── Each stat item card ────────────────────────────────── */
+.tsc-item {
+  padding: 10px 12px !important;
+  background: var(--surface2) !important;
+  border-radius: 10px !important;
+  border: 1.5px solid var(--border) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 2px !important;
+}
+
+.tsc-label {
+  font-size: .60rem !important;
+  font-weight: 800 !important;
+  text-transform: uppercase !important;
+  letter-spacing: .07em !important;
+  color: var(--txt3) !important;
+}
+
+.tsc-val {
+  font-size: 1.25rem !important;
+  font-weight: 800 !important;
+  color: var(--txt1) !important;
+  line-height: 1.1 !important;
+  font-family: var(--mono) !important;
+  white-space: nowrap !important;
+}
+
+.tsc-val.green { color: var(--green) !important; }
+.tsc-val.amber { color: var(--amber) !important; }
+.tsc-val.red   { color: var(--red)   !important; }
+
+.tsc-unit {
+  font-size: .60rem !important;
+  color: var(--txt3) !important;
+}
+
+/* ── Status badge: full width below the two columns ─────── */
+.tsc-status-badge {
+  display: block !important;
+  width: 100% !important;
+  padding: 8px 14px !important;
+  border-radius: 10px !important;
+  font-size: .72rem !important;
+  font-weight: 800 !important;
+  text-align: center !important;
+  border: 1.5px solid var(--border2) !important;
+  background: var(--surface2) !important;
+  transition: all .3s !important;
+  margin-top: 4px !important;
+  box-sizing: border-box !important;
+}
+
+.tsc-status-badge.ok     { background: var(--green-light) !important; border-color: var(--green) !important; color: var(--green) !important; }
+.tsc-status-badge.warn   { background: var(--amber-light) !important; border-color: var(--amber) !important; color: var(--amber) !important; }
+.tsc-status-badge.danger { background: var(--red-light)   !important; border-color: var(--red)   !important; color: var(--red)   !important; }
+
+/* ── Level bar: below everything, with tick labels ──────── */
+.tank-level-bar {
+  position: relative !important;
+  height: 12px !important;
+  background: var(--border) !important;
+  border-radius: 6px !important;
+  overflow: hidden !important;
+  margin-top: 32px !important; /* space for tick labels above */
+}
+
+.tlb-fill {
+  height: 100% !important;
+  border-radius: 6px !important;
+  transition: width 1s ease !important;
+}
+
+.tlb-markers {
+  position: absolute !important;
+  top: -22px !important;
+  left: 0 !important;
+  right: 0 !important;
+  height: 20px !important;
+  pointer-events: none !important;
+}
+
+.tlb-mark {
+  position: absolute !important;
+  font-size: .58rem !important;
+  font-weight: 800 !important;
+  transform: translateX(-50%) !important;
+  white-space: nowrap !important;
+}
+
+.tlb-mark.danger { color: var(--red)   !important; }
+.tlb-mark.warn   { color: var(--amber) !important; }
+.tlb-mark.ok     { color: var(--green) !important; }
+
+/* ── Tank card itself: enough padding ───────────────────── */
+.fuel-tank-card {
+  min-width: 280px !important;
+  overflow: visible !important;
+}
+
+/* ── Responsive: stack on mobile ────────────────────────── */
+@media (max-width: 560px) {
+  .tank-viz-row {
+    flex-direction: column !important;
+    align-items: center !important;
+  }
+
+  .tank-3d {
+    width: auto !important;
+  }
+
+  .tank-stats-col {
+    width: 100% !important;
+  }
+
+  .tank-3d-body {
+    width: 80px !important;
+    height: 140px !important;
+  }
+
+  .tank-3d-markers {
+    height: 140px !important;
+  }
+}
+/* ── Compact Fuel Detail Cards ── */
+.fuel-detail-row {
+  grid-template-columns: 1fr 1fr 1fr 1fr !important;
+  align-items: start !important;
+}
+
+.fuel-tank-card,
+.fuel-burn-card,
+.fuel-runtime-card,
+.fuel-chart-card {
+  padding: 14px 16px !important;
+}
+
+/* Shrink explain boxes */
+.fuel-explain-box {
+  font-size: .66rem !important;
+  padding: 7px 10px !important;
+  margin-bottom: 10px !important;
+  line-height: 1.5 !important;
+}
+
+/* Shrink tank 3D visual */
+.tank-3d-body {
+  width: 55px !important;
+  height: 110px !important;
+}
+
+.tank-3d-markers {
+  height: 110px !important;
+}
+
+.tank-3d-pct {
+  font-size: .70rem !important;
+}
+
+.tank-3d-litres {
+  font-size: .55rem !important;
+}
+
+.tank-stats-col {
+  gap: 6px !important;
+}
+
+.tsc-item {
+  padding: 6px 10px !important;
+}
+
+.tsc-label {
+  font-size: .58rem !important;
+}
+
+.tsc-val {
+  font-size: 1rem !important;
+}
+
+.tsc-unit {
+  font-size: .56rem !important;
+}
+
+.tsc-status-badge {
+  font-size: .66rem !important;
+  padding: 5px 10px !important;
+}
+
+/* Shrink burn rate display */
+.burn-rate-display {
+  gap: 8px !important;
+  margin-bottom: 10px !important;
+}
+
+.brd-val {
+  font-size: 2rem !important;
+}
+
+.brd-unit {
+  font-size: .65rem !important;
+}
+
+.brd-label {
+  font-size: .58rem !important;
+}
+
+.brd-expected {
+  font-size: 1.3rem !important;
+}
+
+.brd-expected-label {
+  font-size: .56rem !important;
+}
+
+.brd-expected-unit {
+  font-size: .62rem !important;
+}
+
+.brd-main,
+.brd-vs {
+  padding: 10px 12px !important;
+}
+
+/* Shrink load burn table */
+.lbt-head {
+  font-size: .56rem !important;
+  padding: 4px 8px !important;
+  grid-template-columns: 90px 70px 1fr !important;
+}
+
+.lbt-row {
+  padding: 5px 8px !important;
+  grid-template-columns: 90px 70px 1fr !important;
+  gap: 6px !important;
+}
+
+.lbt-load {
+  font-size: .64rem !important;
+}
+
+.lbt-burn {
+  font-size: .64rem !important;
+}
+
+.lbt-note {
+  font-size: .60rem !important;
+}
+
+/* Shrink runtime card */
+.runtime-big {
+  padding: 12px 8px !important;
+  margin-bottom: 10px !important;
+}
+
+.rtb-number {
+  font-size: 2.8rem !important;
+}
+
+.rtb-label {
+  font-size: .68rem !important;
+}
+
+.rtb-sub {
+  font-size: .60rem !important;
+}
+
+.runtime-breakdown {
+  gap: 4px !important;
+  margin-bottom: 8px !important;
+}
+
+.rbd-row {
+  padding: 5px 8px !important;
+}
+
+.rbd-lbl {
+  font-size: .62rem !important;
+}
+
+.rbd-val {
+  font-size: .80rem !important;
+}
+
+.rbd-unit {
+  font-size: .56rem !important;
+  min-width: 55px !important;
+}
+
+.refuel-alert,
+.refuel-warn {
+  padding: 7px 10px !important;
+  font-size: .68rem !important;
+}
+
+/* Responsive: stack to 2 columns on medium screens */
+@media (max-width: 1200px) {
+  .fuel-detail-row {
+    grid-template-columns: 1fr 1fr !important;
+  }
+  .fuel-chart-card {
+    grid-column: 1 / -1 !important;
+  }
+}
+
+/* Responsive: single column on mobile */
+@media (max-width: 640px) {
+  .fuel-detail-row {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* ── Fuel Detail Row: Equal height 3-column layout ── */
+.fuel-detail-row {
+  grid-template-columns: 1fr 1fr 1fr !important;
+  align-items: stretch !important;
+  gap: 16px !important;
+}
+
+.fuel-tank-card,
+.fuel-burn-card,
+.fuel-runtime-card {
+  display: flex !important;
+  flex-direction: column !important;
+  height: 100% !important;
+  min-height: 600px !important;
+  box-sizing: border-box !important;
+}
+
+.fuel-chart-card {
+  grid-column: 1 / -1 !important;
+}
+
+/* Tank card internals stretch */
+.fuel-tank-card .tank-viz-row {
+  flex: 1 !important;
+}
+
+/* Burn card: table stretches to fill */
+.fuel-burn-card .load-burn-table {
+  flex: 1 !important;
+}
+
+.fuel-burn-card .lbt-row {
+  padding: 10px 10px !important;
+  min-height: 60px !important;
+  align-items: center !important;
+}
+
+/* Runtime card: breakdown stretches */
+.fuel-runtime-card .runtime-breakdown {
+  flex: 1 !important;
+}
+
+.fuel-runtime-card .rbd-row {
+  padding: 10px 10px !important;
+  min-height: 48px !important;
+}
+
+/* Equal font sizes across all 3 cards */
+.fuel-tank-card .card-label,
+.fuel-burn-card .card-label,
+.fuel-runtime-card .card-label {
+  font-size: .74rem !important;
+  font-weight: 900 !important;
+  margin-bottom: 12px !important;
+}
+
+/* Burn rate big numbers — match runtime big number */
+.brd-val {
+  font-size: 2.4rem !important;
+}
+
+.brd-expected {
+  font-size: 1.6rem !important;
+}
+
+.brd-main,
+.brd-vs {
+  padding: 14px 16px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: center !important;
+  align-items: center !important;
+}
+
+/* Runtime big number — match burn card height */
+.runtime-big {
+  padding: 20px 10px !important;
+  margin-bottom: 14px !important;
+}
+
+.rtb-number {
+  font-size: 3.6rem !important;
+}
+
+/* Tank stats col — stretch to fill */
+.tank-stats-col {
+  flex: 1 !important;
+  justify-content: space-between !important;
+}
+
+.tsc-item {
+  flex: 1 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: center !important;
+  padding: 10px 12px !important;
+}
+
+.tsc-val {
+  font-size: 1.2rem !important;
+}
+
+/* Status badge always at bottom of tank card */
+.tsc-status-badge {
+  margin-top: auto !important;
+}
+
+/* Responsive: 2-col on tablet */
+@media (max-width: 1100px) {
+  .fuel-detail-row {
+    grid-template-columns: 1fr 1fr !important;
+  }
+
+  .fuel-tank-card,
+  .fuel-burn-card,
+  .fuel-runtime-card {
+    min-height: unset !important;
+  }
+
+  .fuel-runtime-card {
+    grid-column: 1 / -1 !important;
+  }
+
+  .fuel-chart-card {
+    grid-column: 1 / -1 !important;
+  }
+}
+
+/* Responsive: single col on mobile */
+@media (max-width: 640px) {
+  .fuel-detail-row {
+    grid-template-columns: 1fr !important;
+  }
+
+  .fuel-tank-card,
+  .fuel-burn-card,
+  .fuel-runtime-card {
+    min-height: unset !important;
+    grid-column: unset !important;
+  }
+}
+
+/* ── Warning Strip ── */
+#warnStrip {
+  background: #FEF3C7;
+  border-bottom: 2px solid #D97706;
+  padding: 0;
+  overflow: hidden;
+}
+
+#warnStrip.has-shutdown {
+  background: #FEE2E2;
+  border-bottom-color: #DC2626;
+}
+
+.ws-inner {
+  display: flex;
+  align-items: stretch;
+  flex-wrap: wrap;
+  gap: 0;
+}
+
+.ws-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 16px;
+  background: #D97706;
+  color: #fff;
+  font-size: .72rem;
+  font-weight: 800;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+#warnStrip.has-shutdown .ws-header {
+  background: #DC2626;
+}
+
+.ws-items {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0;
+  padding: 0 8px;
+  flex: 1;
+}
+
+.ws-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: .72rem;
+  font-weight: 700;
+  color: #92400E;
+  border-right: 1px solid rgba(217,119,6,.2);
+  white-space: nowrap;
+}
+
+#warnStrip.has-shutdown .ws-item {
+  color: #991B1B;
+  border-right-color: rgba(220,38,38,.2);
+}
+
+.ws-item:last-child {
+  border-right: none;
+}
+
+.ws-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #D97706;
+  flex-shrink: 0;
+  animation: wsPulse 1.4s infinite;
+}
+
+#warnStrip.has-shutdown .ws-dot {
+  background: #DC2626;
+}
+
+@keyframes wsPulse {
+  0%,100% { opacity: 1; }
+  50%      { opacity: .3; }
+}
+
+.ws-item.shutdown-item .ws-dot {
+  background: #DC2626;
+}
+
+.ws-item.shutdown-item {
+  color: #991B1B;
+}
+
+@media (max-width: 768px) {
+  .ws-header { padding: 6px 10px; font-size: .65rem; }
+  .ws-item   { padding: 5px 8px;  font-size: .68rem; }
+}
+/* ════════════════════════════════════════════════════════════════
+   FUEL TANK CARD — COMPLETE CSS FIX
+   Append to END of style.css
+   Fixes: marker overlap, stat card value display, gap issues
+   ════════════════════════════════════════════════════════════════ */
+
+/* ── Tank viz row: side-by-side, no overflow ─────────────── */
+.tank-viz-row {
+  display: flex !important;
+  flex-direction: row !important;
+  gap: 16px !important;
+  align-items: stretch !important;
+  margin-bottom: 12px !important;
+  width: 100% !important;
+  min-height: 160px !important;
+}
+
+/* ── Left: tank body + marker ticks ─────────────────────── */
+.tank-3d {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: stretch !important;
+  gap: 6px !important;
+  flex-shrink: 0 !important;
+  width: auto !important;
+}
+
+/* ── Tank cylinder ───────────────────────────────────────── */
+.tank-3d-body {
+  width: 60px !important;
+  height: 160px !important;
+  border: 2px solid var(--border2, #C8D5EF) !important;
+  border-radius: 5px 5px 8px 8px !important;
+  position: relative !important;
+  overflow: hidden !important;
+  background: var(--surface2, #F8FAFF) !important;
+  flex-shrink: 0 !important;
+}
+
+.tank-3d-fill {
+  position: absolute !important;
+  bottom: 0 !important; left: 0 !important; right: 0 !important;
+  background: linear-gradient(to top, #059669, rgba(52,211,153,.45)) !important;
+  transition: height 1s cubic-bezier(.4,0,.2,1) !important;
+}
+
+.tank-3d-pct {
+  position: absolute !important;
+  top: 8px !important; left: 0 !important; right: 0 !important;
+  text-align: center !important;
+  font-size: .80rem !important; font-weight: 900 !important;
+  color: var(--txt1, #0A0F1E) !important; z-index: 2 !important;
+  text-shadow: 0 1px 3px rgba(255,255,255,.9) !important;
+}
+
+.tank-3d-litres {
+  position: absolute !important;
+  bottom: 6px !important; left: 0 !important; right: 0 !important;
+  text-align: center !important;
+  font-size: .60rem !important; font-weight: 800 !important;
+  color: var(--txt1, #0A0F1E) !important; z-index: 2 !important;
+  font-family: var(--mono) !important;
+  text-shadow: 0 1px 3px rgba(255,255,255,.9) !important;
+}
+
+/* ── Marker ticks column — sits right of tank ────────────── */
+.tank-3d-markers {
+  position: relative !important;
+  width: 44px !important;
+  height: 160px !important;
+  flex-shrink: 0 !important;
+}
+
+.tank-marker {
+  position: absolute !important;
+  left: 4px !important;
+  line-height: 1.2 !important;
+  white-space: nowrap !important;
+  /* translate UP by half own height so label centers on the tick */
+  transform: translateY(-50%) !important;
+}
+
+/* Position each marker by bottom% matching tank fill levels */
+.tank-marker[style*="bottom:98%"] { bottom: 98% !important; }
+.tank-marker[style*="bottom:48%"] { bottom: 48% !important; }
+.tank-marker[style*="bottom:23%"] { bottom: 23% !important; }
+.tank-marker[style*="bottom:0%"]  { bottom: 2%  !important; }
+
+.tank-marker span:first-child {
+  display: block !important;
+  font-size: .60rem !important; font-weight: 800 !important;
+  color: var(--txt3, #4A5568) !important; line-height: 1.2 !important;
+}
+.tank-marker span:last-child {
+  display: block !important;
+  font-size: .55rem !important;
+  color: var(--txt3, #4A5568) !important;
+  font-family: var(--mono) !important; line-height: 1.2 !important;
+}
+.tank-marker.warn   span { color: var(--amber, #D97706) !important; }
+.tank-marker.danger span { color: var(--red,   #DC2626) !important; }
+
+/* ── Stat cards column ───────────────────────────────────── */
+.tank-stats-col {
+  flex: 1 !important;
+  min-width: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 6px !important;
+}
+
+.tsc-item {
+  flex: 1 !important;
+  padding: 8px 10px !important;
+  background: var(--surface2, #F8FAFF) !important;
+  border-radius: 8px !important;
+  border: 1px solid var(--border, #E2E8F5) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: center !important;
+  gap: 2px !important;
+}
+
+.tsc-label {
+  font-size: .60rem !important; font-weight: 800 !important;
+  text-transform: uppercase !important; letter-spacing: .07em !important;
+  color: var(--txt3, #4A5568) !important;
+}
+
+.tsc-val {
+  font-size: 1.15rem !important; font-weight: 800 !important;
+  color: var(--txt1, #0A0F1E) !important;
+  font-family: var(--mono) !important; line-height: 1.1 !important;
+  min-height: 1.3rem !important; /* prevent collapse when showing dash */
+}
+
+.tsc-val.green { color: var(--green, #059669) !important; }
+.tsc-val.amber { color: var(--amber, #D97706) !important; }
+.tsc-val.red   { color: var(--red,   #DC2626) !important; }
+
+.tsc-unit {
+  font-size: .60rem !important; color: var(--txt3, #4A5568) !important;
+}
+
+/* ── Status badge: full width, no gap ────────────────────── */
+.tsc-status-badge {
+  display: block !important; width: 100% !important;
+  box-sizing: border-box !important;
+  padding: 7px 12px !important; border-radius: 8px !important;
+  font-size: .72rem !important; font-weight: 800 !important;
+  text-align: center !important;
+  border: 1.5px solid var(--border2, #C8D5EF) !important;
+  background: var(--surface2, #F8FAFF) !important;
+  margin-top: 6px !important;
+  transition: all .3s !important;
+}
+.tsc-status-badge.ok     { background: #D1FAE5 !important; border-color: #059669 !important; color: #065F46 !important; }
+.tsc-status-badge.warn   { background: #FEF3C7 !important; border-color: #D97706 !important; color: #92400E !important; }
+.tsc-status-badge.danger { background: #FEE2E2 !important; border-color: #DC2626 !important; color: #991B1B !important; }
+
+/* ── Level bar: tight to content, no huge gap ────────────── */
+.tank-level-section {
+  margin-top: 10px !important;
+}
+
+.tlb-tick-labels {
+  display: flex !important; justify-content: space-between !important;
+  margin-bottom: 5px !important; padding: 0 2px !important;
+}
+
+.tlb-tick-labels span {
+  font-size: .58rem !important; font-weight: 800 !important;
+}
+
+.tank-level-bar {
+  height: 10px !important;
+  background: var(--border, #E2E8F5) !important;
+  border-radius: 5px !important; overflow: hidden !important;
+  position: relative !important;
+}
+
+.tlb-fill {
+  height: 100% !important; border-radius: 5px !important;
+  transition: width 1s ease !important;
+}
+
+.tank-capacity-label {
+  text-align: right !important; margin-top: 3px !important;
+  font-size: .60rem !important;
+  color: var(--txt3, #4A5568) !important;
+  font-family: var(--mono) !important;
+}
+
+/* ── Responsive: stack on mobile ─────────────────────────── */
+@media (max-width: 560px) {
+  .tank-viz-row {
+    flex-direction: column !important;
+    align-items: center !important;
+    min-height: unset !important;
+  }
+  .tank-3d { width: 100% !important; justify-content: center !important; }
+  .tank-stats-col { width: 100% !important; flex-direction: row !important; flex-wrap: wrap !important; }
+  .tsc-item { flex: 1 1 120px !important; }
+}
+
+/* ════════════════════════════════════════════════════════════════
+   DAILY SUMMARY CHARTS CSS — Append to END of style.css
+   ════════════════════════════════════════════════════════════════ */
+
+/* ── Daily summary block injected into detail overlay ─────── */
+.daily-summary-block {
+  width: 100%;
+  padding: 0;
+}
+
+/* ── 7-day chart panels ──────────────────────────────────── */
+.daily-summary-block .gsd-chart-panel {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* ── Section divider inside daily block ─────────────────── */
+.daily-summary-block [style*="border-bottom:1.5px solid #E2E8F5"] {
+  width: 100%;
+}
+
+/* ── Fuel session strip: 7-cell responsive grid ──────────── */
+.fuel-session-strip {
+  display: flex;
+  align-items: stretch;
+  flex-wrap: wrap;
+  gap: 0;
+  background: var(--bg2, #fff);
+  border: 1.5px solid var(--border, #E2E8F5);
+  border-radius: var(--r-lg, 20px);
+  padding: 10px 16px;
+  margin-bottom: 18px;
+  box-shadow: var(--shadow);
+  overflow-x: auto;
+}
+
+.fss-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  flex: 1;
+  min-width: 130px;
+}
+
+.fss-icon { font-size: 1.3rem; flex-shrink: 0; }
+
+.fss-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.fss-label {
+  font-size: .60rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--txt3, #4A5568);
+  white-space: nowrap;
+}
+
+.fss-value {
+  font-size: 1.1rem;
+  font-weight: 800;
+  color: var(--txt1, #0A0F1E);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.fss-value.green { color: var(--green, #059669); }
+.fss-value.amber { color: var(--amber, #D97706); }
+.fss-value.red   { color: var(--red,   #DC2626); }
+
+.fss-sub {
+  font-size: .62rem;
+  color: var(--txt3, #4A5568);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.fss-arrow {
+  font-size: 1rem;
+  color: var(--border2, #C8D5EF);
+  flex-shrink: 0;
+  padding: 0 2px;
+  align-self: center;
+}
+
+.fss-sep {
+  width: 1.5px;
+  height: 48px;
+  background: var(--border, #E2E8F5);
+  margin: 0 6px;
+  flex-shrink: 0;
+  align-self: center;
+}
+
+/* ── Responsive: tablet ──────────────────────────────────── */
+@media (max-width: 1100px) {
+  .fuel-session-strip {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0;
+    padding: 8px 10px;
+  }
+  .fss-arrow, .fss-sep { display: none; }
+  .fss-cell {
+    padding: 8px 10px;
+    border-bottom: 1px dashed var(--border, #E2E8F5);
+    min-width: unset;
+  }
+  .fss-cell:nth-child(3n) { border-right: none; }
+}
+
+/* ── Responsive: mobile ──────────────────────────────────── */
+@media (max-width: 640px) {
+  .fuel-session-strip {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .fss-value { font-size: .95rem; }
+  .fss-label { font-size: .56rem; }
+}
+
+@media (max-width: 420px) {
+  .fuel-session-strip {
+    grid-template-columns: 1fr;
+  }
+}
+
+.refill-tracker-card {
+  max-width: 100%;
+  overflow-x: hidden; /* prevent the card itself from widening the page */
+}
+
+.rtc-table-wrap {
+  width: 100%;
+  max-width: 100%;
+}
+
+.rtc-summary,
+.rtc-chart-wrap {
+  width: 100%;
+  max-width: 100%;
+}
+
+.gfd-summary-wrap {
+  max-width: 100%;
+  overflow-x: hidden;
+  box-sizing: border-box;
+}
+
+.gfd-table-scroll {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.gfd-table {
+  min-width: 700px; /* allows horizontal scroll instead of squishing */
+}
+
+@media (max-width: 640px) {
+  .fuel-session-strip {
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+}
+
+.refill-tracker-card {
+  max-width: 100%;
+}
+
+.rtc-table-wrap {
+  width: 100%;
+  max-width: 100%;
+}
