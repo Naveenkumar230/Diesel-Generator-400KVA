@@ -1,0 +1,1147 @@
+/*
+ * ================================================================
+ *  Cummins 400kVA DG-SET Monitor — PlatformIO main.cpp
+ *  Controller : Cummins PowerStart PS0600
+ *  Protocol   : RS485 Modbus RTU  (UART2 / Serial2)
+ *  Transport  : HTTP POST → Node.js backend  (WiFi)
+ *
+ *  Register Map Source: A029X159 Issue 29, Section 15 (PS0600)
+ *  All addresses verified line-by-line from TABLE 49 in official PDF.
+ *
+ *  CHANGES vs ORIGINAL:
+ *  ─────────────────────────────────────────────────────────────────
+ *  FIXED:
+ *   1. REG_OIL_PRESSURE  was addr 61  → WRONG (400062). Oil Pressure
+ *      is 400062 in PDF. Battery Voltage is 400061.
+ *      Original had them SWAPPED. Now corrected.
+ *   2. REG_CURR_PCT_L1/L2/L3 were addrs 57/58/59 (400058/59/60).
+ *      PDF says 400058=L1%, 400059=L2%, 400060=L3%. Original used
+ *      addr 57/58/59 which is correct (400001 base). ✓ OK actually.
+ *      NOTE: Original comment said "400061→addr 60: Battery Voltage"
+ *      but code had REG_BATT_VOLTAGE=60 and REG_OIL_PRESSURE=61.
+ *      PDF: 400061=Battery(addr 60), 400062=Oil Pressure(addr 61). FIXED.
+ *   3. REG_BOOST_PRESSURE was addr 229 (400230). PDF says 400230=Boost. ✓
+ *      But original comment said "400230→addr 229: Boost" which is
+ *      correct (400230-400001=229). ✓ OK.
+ *   4. Utility Frequency 400144 is 32-bit uint32 multiplier 0.001 Hz
+ *      (NOT ×0.01 as one might assume). Fixed to read as 32-bit.
+ *   5. Warning fault queue was only 5 rows (401012-401016).
+ *      PDF has 10 rows: 401012-401021. Added rows 6-10.
+ *   6. Exhaust Gas Temp (400585) was referenced in JSON but NEVER READ.
+ *      Now properly read.
+ *   7. Coolant Pressure (406124) was referenced in JSON but NEVER READ.
+ *      Now properly read.
+ *
+ *  ADDED (in official PDF, completely missing from original):
+ *   8.  Utility L1-N, L2-N, L3-N Voltages (400118, 400119, 400120)
+ *   9.  Utility L1-L2, L2-L3, L3-L1 Voltages (400122, 400123, 400124)
+ *  10.  Utility Frequency (400144) — 32-bit, ×0.001 Hz
+ *  11.  AMF (Auto Mains Failure) State (401024) — transfer state machine
+ *  12.  Transfer Switch Feedback Status (401025) — at utility or genset
+ *  13.  Fuel Outlet Pressure / Fuel Rail Pressure (400258) — 32-bit, ×0.1 psi
+ *  14.  Fuel Shutoff Output Status (400543) — solenoid ON/OFF
+ *  15.  Starter Output Status (400557) — starter relay ON/OFF
+ *  16.  Customer Input #1 (403793) — dry contact input status
+ *  17.  Customer Input #2 (403599) — dry contact input status
+ *  18.  Customer Input #3 (403562) — dry contact input status
+ *  19.  Genset Model Number (403033) — 20-char string (21 registers)
+ *  20.  Genset Serial Number (403049) — 20-char string (21 registers)
+ *  21.  Modbus Remote Start command register (400300) — R/W
+ *  22.  Modbus Fault Reset command register (400301) — R/W
+ *  23.  Warning Fault Queue rows 6-10 (401017-401021) — was only 5 rows
+ *  24.  Low Battery Voltage Threshold (403511) — ×0.1 V
+ *  25.  High Battery Voltage Threshold (403676) — ×0.1 V
+ *  26.  PGI Major/Minor Version (400238, 400239) — firmware version
+ *  27.  Exercise Scheduler State (403778) — Inactive/Active/Abort
+ *
+ *  IMPORTANT NOTE ON MODBUS ADDRESSING:
+ *  PDF shows "400011" style. FC=03 address = DocumentAddr - 400001
+ *  Example: 400018 → FC03 addr = 17
+ *
+ *  PlatformIO lib_deps:
+ *    4-20mA/ModbusMaster @ ^2.0.1
+ *    bblanchon/ArduinoJson @ ^6.21.3
+ *
+ *  WIRING — RS485 TTL module (MAX485 / SP3485):
+ *  ┌─────────────────────────────────────────────┐
+ *  │  ESP32 GPIO16 (RX2)  ──►  RO  (Rcv Output) │
+ *  │  ESP32 GPIO17 (TX2)  ──►  DI  (Drv Input)  │
+ *  │  ESP32 GPIO4         ──►  DE + RE (tied)    │
+ *  │  3.3V / 5V           ──►  VCC               │
+ *  │  GND                 ──►  GND               │
+ *  │  RS485 A (non-inv.)  ──►  PS0600 TB15-3     │
+ *  │  RS485 B (inv.)      ──►  PS0600 TB15-4     │
+ *  │  GND common          ──►  PS0600 TB15-1     │
+ *  └─────────────────────────────────────────────┘
+ *
+ *  PS0600 Modbus default: Node=1, Baud=9600, No Parity, 1 Stop
+ * ================================================================
+ */
+
+#include <Arduino.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <ArduinoJson.h>
+#include <ModbusMaster.h>
+#include <WiFiClientSecure.h>
+#include <PubSubClient.h>
+
+// ════════════════════════════════════════════════════════════════
+//  USER CONFIGURATION
+// ════════════════════════════════════════════════════════════════
+// ── WiFi ────────────────────────────────────────────────────
+#define WIFI_SSID        "AIPL-IOT"
+#define WIFI_PASSWORD    "@ipl2026"
+
+// ── Backend (keep HTTP as fallback) ─────────────────────────
+// #define SERVER_URL       "http://YOUR_SERVER_IP:3000/api/genset-data"
+
+// ── HiveMQ Cloud MQTT (TLS 8883) ────────────────────────────
+#define MQTT_BROKER      "a0d0d0e9332a4d3db7516f6125f6e677.s1.eu.hivemq.cloud"
+#define MQTT_PORT        8883
+#define MQTT_USER        "TemperatureSensor"
+#define MQTT_PASS        "Naveen235623@@"
+#define MQTT_CLIENT_ID   "gensight-esp32"
+#define MQTT_TOPIC_DATA  "gensight/genset/data"
+#define MQTT_TOPIC_CMD   "gensight/genset/cmd"
+
+// ── Poll interval ────────────────────────────────────────────
+#define POLL_INTERVAL_MS  2000
+
+// ─── RS485 Pins ──────────────────────────────────────────────
+#define RS485_RX_PIN      16
+#define RS485_TX_PIN      17
+#define WIFI_LED_PIN      26     
+#define RS485_DE_RE_PIN    4
+#define RS485_BAUD_RATE   9600
+
+// ─── Modbus ──────────────────────────────────────────────────
+#define MODBUS_SLAVE_ID    1
+
+// ════════════════════════════════════════════════════════════════
+//  PS0600 MODBUS REGISTER MAP  (TABLE 49, A029X159 Issue 29)
+//  FC03 address = Document Address - 400001
+// ════════════════════════════════════════════════════════════════
+
+// ─── Genset Status ───────────────────────────────────────────
+// 400009 → addr  8 : Application Device Type (uint16)
+static const uint16_t REG_DEVICE_TYPE      =   8;
+// 400010 → addr  9 : Control Switch Position (0=Off,1=Auto,2=Manual)
+static const uint16_t REG_SWITCH_POSITION  =   9;
+// 400011 → addr 10 : Genset State (0=Off..8=Running..9=Fault Shutdown)
+static const uint16_t REG_GENSET_STATE     =  10;
+// 400012 → addr 11 : Current Fault Code (uint16)
+static const uint16_t REG_FAULT_CODE       =  11;
+// 400013 → addr 12 : Current Fault Severity (0=None,1=Warning,2=Shutdown)
+static const uint16_t REG_FAULT_SEVERITY   =  12;
+// 400016 → addr 15 : NFPA 110 Fault Register HIGH word (32-bit uint32)
+static const uint16_t REG_NFPA110_H        =  15;
+// 400017 → addr 16 : NFPA 110 Fault Register LOW word
+// (read as 32-bit starting at addr 15)
+
+// ─── AC Genset Voltages — Line-to-Neutral ────────────────────
+// 400018 → addr 17 : Genset L1-N RMS Voltage, ×1, V, uint16
+static const uint16_t REG_VOLT_L1N         =  17;
+// 400019 → addr 18 : Genset L2-N RMS Voltage
+static const uint16_t REG_VOLT_L2N         =  18;
+// 400020 → addr 19 : Genset L3-N RMS Voltage
+static const uint16_t REG_VOLT_L3N         =  19;
+
+// ─── AC Genset Voltages — Line-to-Line ───────────────────────
+// 400022 → addr 21 : Genset L1-L2 RMS Voltage, ×1, V, uint16
+static const uint16_t REG_VOLT_L1L2        =  21;
+// 400023 → addr 22 : Genset L2-L3 RMS Voltage
+static const uint16_t REG_VOLT_L2L3        =  22;
+// 400024 → addr 23 : Genset L3-L1 RMS Voltage
+static const uint16_t REG_VOLT_L3L1        =  23;
+
+// ─── AC Genset Currents ───────────────────────────────────────
+// 400026 → addr 25 : Genset L1 RMS Current, ×1, A, uint16 (0–10000)
+static const uint16_t REG_CURR_L1          =  25;
+// 400027 → addr 26 : Genset L2 RMS Current
+static const uint16_t REG_CURR_L2          =  26;
+// 400028 → addr 27 : Genset L3 RMS Current
+static const uint16_t REG_CURR_L3          =  27;
+
+// ─── Power — kW (signed int16) ───────────────────────────────
+// 400031 → addr 30 : Genset L1 kW, ×1, int16 (−10000 to 10000)
+static const uint16_t REG_KW_L1            =  30;
+// 400032 → addr 31 : Genset L2 kW
+static const uint16_t REG_KW_L2            =  31;
+// 400033 → addr 32 : Genset L3 kW
+static const uint16_t REG_KW_L3            =  32;
+// 400034 → addr 33 : Genset Total kW
+static const uint16_t REG_KW_TOTAL         =  33;
+
+// ─── Power — kVAR (signed int16) ─────────────────────────────
+// 400035 → addr 34 : Genset L1 kVAR, ×1, int16
+static const uint16_t REG_KVAR_L1          =  34;
+// 400036 → addr 35 : Genset L2 kVAR
+static const uint16_t REG_KVAR_L2          =  35;
+// 400037 → addr 36 : Genset L3 kVAR
+static const uint16_t REG_KVAR_L3          =  36;
+// 400038 → addr 37 : Genset Total kVAR
+static const uint16_t REG_KVAR_TOTAL       =  37;
+
+// ─── Power — kVA (uint16) ─────────────────────────────────────
+// 400040 → addr 39 : Genset L1 kVA, ×1, uint16
+static const uint16_t REG_KVA_L1           =  39;
+// 400041 → addr 40 : Genset L2 kVA
+static const uint16_t REG_KVA_L2           =  40;
+// 400042 → addr 41 : Genset L3 kVA
+static const uint16_t REG_KVA_L3           =  41;
+// 400043 → addr 42 : Genset Total kVA
+static const uint16_t REG_KVA_TOTAL        =  42;
+
+// ─── Frequency ────────────────────────────────────────────────
+// 400044 → addr 43 : Genset Frequency, ×0.01, Hz, uint16
+//   Example: raw=5000 → 50.00 Hz
+static const uint16_t REG_FREQUENCY        =  43;
+
+// ─── Current % of rated ───────────────────────────────────────
+// 400058 → addr 57 : Genset L1 RMS Current %, ×0.1, %, uint16
+static const uint16_t REG_CURR_PCT_L1      =  57;
+// 400059 → addr 58 : Genset L2 RMS Current %
+static const uint16_t REG_CURR_PCT_L2      =  58;
+// 400060 → addr 59 : Genset L3 RMS Current %
+static const uint16_t REG_CURR_PCT_L3      =  59;
+
+// ─── Battery & Charging ───────────────────────────────────────
+// 400061 → addr 60 : Battery Voltage, ×0.001, V, uint16
+//   Example: raw=12500 → 12.500 V
+static const uint16_t REG_BATT_VOLTAGE     =  60;
+
+// ─── Engine Mechanical ────────────────────────────────────────
+// 400062 → addr 61 : Oil Pressure, ×0.1, psi, uint16 (0–900)
+static const uint16_t REG_OIL_PRESSURE     =  61;
+// 400063 → addr 62 : Oil Temperature, ×0.1, °F, int16
+static const uint16_t REG_OIL_TEMP         =  62;
+// 400064 → addr 63 : Coolant Temperature, ×0.1, °F, int16 (−40 to 410)
+static const uint16_t REG_COOLANT_TEMP     =  63;
+// 400065 → addr 64 : Intake Manifold Temperature, ×0.1, °F, int16
+static const uint16_t REG_INTAKE_TEMP      =  64;
+// 400066 → addr 65 : Fuel Temperature, ×0.1, °F, int16
+static const uint16_t REG_FUEL_TEMP        =  65;
+// 400068 → addr 67 : Average Engine Speed, ×0.125, RPM, uint16 (0–8191.875)
+//   Example: raw=12000 → 1500.0 RPM
+static const uint16_t REG_ENGINE_RPM       =  67;
+
+// ─── Engine Hours & Starts ────────────────────────────────────
+// 400069 → addr 68 : Start Attempts, ×1, uint16 (lifetime count)
+static const uint16_t REG_START_ATTEMPTS   =  68;
+// 400070 → addr 69 : Engine Running Time HIGH word, 32-bit, ×0.05, Hours
+//   Example: raw32=100000 → 5000.00 hours
+static const uint16_t REG_ENGINE_HRS_H     =  69;
+// 400071 → addr 70 : Engine Running Time LOW word (read as 32-bit from addr 69)
+
+// ─── Utility (Mains / City Power) Voltages ───────────────────
+// 400118 → addr 117 : Utility L1-N RMS Voltage, ×1, V, uint16
+//   *** COMPLETELY MISSING IN ORIGINAL — ADDED ***
+static const uint16_t REG_UTIL_VOLT_L1N    = 117;
+// 400119 → addr 118 : Utility L2-N RMS Voltage
+static const uint16_t REG_UTIL_VOLT_L2N    = 118;
+// 400120 → addr 119 : Utility L3-N RMS Voltage
+static const uint16_t REG_UTIL_VOLT_L3N    = 119;
+// 400122 → addr 121 : Utility L1-L2 RMS Voltage, ×1, V, uint16
+static const uint16_t REG_UTIL_VOLT_L1L2   = 121;
+// 400123 → addr 122 : Utility L2-L3 RMS Voltage
+static const uint16_t REG_UTIL_VOLT_L2L3   = 122;
+// 400124 → addr 123 : Utility L3-L1 RMS Voltage
+static const uint16_t REG_UTIL_VOLT_L3L1   = 123;
+// 400144 → addr 143 : Utility Frequency, ×0.001, Hz, 32-bit uint32
+//   *** MISSING IN ORIGINAL — ADDED — Note: 32-bit, multiplier 0.001 ***
+//   Example: raw32=50000 → 50.000 Hz
+static const uint16_t REG_UTIL_FREQ_H      = 143;
+
+// ─── Customer Inputs (Dry Contact Inputs) ────────────────────
+// 400146 → addr 145 : Customer Input #5 (0=False,1=True)
+static const uint16_t REG_CUST_INPUT5      = 145;
+// 400147 → addr 146 : Customer Input #6
+static const uint16_t REG_CUST_INPUT6      = 146;
+// 400157 → addr 156 : Customer Input #4
+static const uint16_t REG_CUST_INPUT4      = 156;
+
+// ─── Charging Alternator ──────────────────────────────────────
+// 400207 → addr 206 : Charging Alternator Voltage, ×0.001, V, uint16
+static const uint16_t REG_CHARGE_ALT_V     = 206;
+
+// ─── Warning & Status Lamps ───────────────────────────────────
+// 400228 → addr 227 : Amber Warning Lamp Status (0=Inactive,1=Active)
+static const uint16_t REG_AMBER_WARN       = 227;
+
+// ─── Pressures & Auxiliary Engine ────────────────────────────
+// 400230 → addr 229 : Boost (Intake Manifold Absolute) Pressure, ×0.1, psi, uint16
+static const uint16_t REG_BOOST_PRESSURE   = 229;
+// 400231 → addr 230 : CAN Datalink Status (0=Inactive,1=Active,2=Failed)
+static const uint16_t REG_CAN_STATUS       = 230;
+// 400232 → addr 231 : Crankcase Pressure, ×0.1, psi, int16
+static const uint16_t REG_CRANKCASE_PRESS  = 231;
+
+// ─── PGI Version ──────────────────────────────────────────────
+// 400238 → addr 237 : PGI Major Version, uint8 in uint16
+static const uint16_t REG_PGI_MAJOR        = 237;
+// 400239 → addr 238 : PGI Minor Version, uint8 in uint16
+static const uint16_t REG_PGI_MINOR        = 238;
+
+static const uint16_t REG_PGI_INFO         = 239;
+
+// 400254 → addr 253 : Fuel Supply Pressure, ×0.1, psi, uint16
+static const uint16_t REG_FUEL_SUPPLY_PR   = 253;
+
+// 400258 → addr 257 : Fuel Outlet Pressure (Fuel Rail Pressure)
+//   *** MISSING IN ORIGINAL — ADDED ***
+//   32-bit uint32, ×0.1, psi  (0–36404 psi)
+static const uint16_t REG_FUEL_RAIL_PR_H   = 257;
+
+// 400264 → addr 263 : % Engine Torque/Duty Cycle, ×1, int16
+static const uint16_t REG_ENGINE_TORQUE    = 263;
+
+// ─── Modbus Command Registers (Write to control genset) ──────
+// 400300 → addr 299 : Modbus Remote Start (0=Inactive, 1=Active) R/W
+//   *** MISSING IN ORIGINAL — ADDED ***
+static const uint16_t REG_REMOTE_START     = 299;
+// 400301 → addr 300 : Modbus Fault Reset (0=Inactive, 1=Active) R/W
+//   *** MISSING IN ORIGINAL — ADDED ***
+static const uint16_t REG_FAULT_RESET      = 300;
+
+// ─── Digital Output Status ────────────────────────────────────
+// 400543 → addr 542 : Fuel Shutoff Output Status (0=False,1=True)
+//   *** MISSING IN ORIGINAL — ADDED ***
+static const uint16_t REG_FUEL_SHUTOFF     = 542;
+// 400557 → addr 556 : Starter Output Status (0=False,1=True)
+//   *** MISSING IN ORIGINAL — ADDED ***
+static const uint16_t REG_STARTER_OUT      = 556;
+
+// ─── Exhaust Gas Temperature ──────────────────────────────────
+// 400585 → addr 584 : Exhaust Gas Temperature, ×0.1, °F, int16
+//   *** WAS IN JSON OUTPUT BUT NEVER READ IN ORIGINAL — FIXED ***
+static const uint16_t REG_EXHAUST_TEMP     = 584;
+
+// ─── Active Shutdown Fault Queue (10 rows) ───────────────────
+// 401002 → addr 1001 : Shutdown Fault Row 1
+static const uint16_t REG_SHUT_FAULT_1     = 1001;
+// Rows 2-10 are consecutive: addr 1002..1010
+// (read as 10-register block starting at addr 1001)
+
+// ─── Active Warning Fault Queue (10 rows) ────────────────────
+// 401012 → addr 1011 : Warning Fault Row 1
+static const uint16_t REG_WARN_FAULT_1     = 1011;
+// Rows 2-10 are consecutive: addr 1012..1020
+// *** ORIGINAL ONLY READ 5 ROWS (1011-1015). PDF has 10: 1011-1020. FIXED ***
+
+// ─── AMF & Transfer Switch State ─────────────────────────────
+// 401024 → addr 1023 : AMF State (0=Not Available..14=Retransfer Fail)
+//   *** MISSING IN ORIGINAL — ADDED ***
+static const uint16_t REG_AMF_STATE        = 1023;
+// 401025 → addr 1024 : Transfer Switch Feedback Status
+//   (0=Not Available,1=At Utility,2=At Genset,3=Unknown Open,4=Unknown Closed)
+//   *** MISSING IN ORIGINAL — ADDED ***
+static const uint16_t REG_XFER_SW_STATUS  = 1024;
+
+// ─── Genset Model & Serial Number ────────────────────────────
+// 403033 → addr 3032 : Genset Model Number (20-char ASCII string, 10 x uint16)
+//   *** MISSING IN ORIGINAL — ADDED ***
+static const uint16_t REG_MODEL_NUM        = 3032;
+// 403049 → addr 3048 : Genset Serial Number (20-char ASCII string, 10 x uint16)
+//   *** MISSING IN ORIGINAL — ADDED ***
+static const uint16_t REG_SERIAL_NUM       = 3048;
+
+// ─── Fuel Level ───────────────────────────────────────────────
+// 403745 → addr 3744 : Fuel Level Percent, ×1, %, uint16
+static const uint16_t REG_FUEL_LEVEL_PCT   = 3744;
+// 403746 → addr 3745 : Fuel Level Sensor (Litres), ×1, L, uint16
+static const uint16_t REG_FUEL_LEVEL_L     = 3745;
+
+// ─── Battery Thresholds (useful for dashboard alerts) ────────
+// 403511 → addr 3510 : Low Battery Voltage Threshold, ×0.1, V, uint16
+//   *** MISSING IN ORIGINAL — ADDED ***
+static const uint16_t REG_LOW_BATT_THRESH  = 3510;
+// 403676 → addr 3675 : High Battery Voltage Threshold, ×0.1, V, uint16
+//   *** MISSING IN ORIGINAL — ADDED ***
+static const uint16_t REG_HIGH_BATT_THRESH = 3675;
+
+// ─── Exercise Scheduler State ────────────────────────────────
+// 403778 → addr 3777 : Exercise Scheduler State (0=Inactive,1=Active,2=Abort)
+//   *** MISSING IN ORIGINAL — ADDED ***
+static const uint16_t REG_SCHEDULER_STATE  = 3777;
+
+// ─── Customer Inputs ─────────────────────────────────────────
+// 403793 → addr 3792 : Customer Input #1 (0=False,1=True)
+//   *** MISSING IN ORIGINAL — ADDED ***
+static const uint16_t REG_CUST_INPUT1      = 3792;
+// 403599 → addr 3598 : Customer Input #2
+//   *** MISSING IN ORIGINAL — ADDED ***
+static const uint16_t REG_CUST_INPUT2      = 3598;
+// 403562 → addr 3561 : Customer Input #3
+//   *** MISSING IN ORIGINAL — ADDED ***
+static const uint16_t REG_CUST_INPUT3      = 3561;
+
+// ─── Engine Operating State (from ECM via CAN) ───────────────
+// 406109 → addr 6108 : Engine Operating State
+//   0=Stopped,1=Prestart,2=Starting,3=Warmup,4=Running,
+//   5=Cooldown,6=Stopping,7=Post Run,8=Out of Range,9=N/A,10=Network Failure
+static const uint16_t REG_ENGINE_OP_STATE  = 6108;
+
+// ─── Coolant Pressure (ECM) ───────────────────────────────────
+// 406124 → addr 6123 : Coolant Pressure, ×0.1, psi, int16 (0–100)
+//   *** WAS IN JSON OUTPUT BUT NEVER READ IN ORIGINAL — FIXED ***
+static const uint16_t REG_COOLANT_PRESS    = 6123;
+
+// ════════════════════════════════════════════════════════════════
+//  Genset State Decoder (register 400011 values)
+// ════════════════════════════════════════════════
+static const char* decodeGensetState(uint16_t code) {
+    switch (code) {
+        case  0: return "OFF";
+        case  1: return "STOP";
+        case  2: return "PREHEAT";
+        case  3: return "PRECRANK";
+        case  4: return "CRANK";
+        case  5: return "STARTER DISCONNECT";
+        case  6: return "PRE-RAMP";
+        case  7: return "RAMP";
+        case  8: return "RUNNING";
+        case  9: return "FAULT SHUTDOWN";
+        case 10: return "PRERUN SETUP";
+        case 11: return "RUNTIME SETUP";
+        case 12: return "FACTORY TEST";
+        case 13: return "WAITING FOR POWERDOWN";  // ← FIXED (matches PDF exactly)
+        default: return "UNKNOWN";
+    }
+}
+
+// ─── Engine Operating State Decoder (register 406109) ────────
+static const char* decodeEngineOpState(uint16_t code) {
+    switch (code) {
+        case  0: return "Engine Stopped";
+        case  1: return "Prestart";
+        case  2: return "Starting";
+        case  3: return "Warmup";
+        case  4: return "Running";
+        case  5: return "Cooldown";
+        case  6: return "Engine Stopping";
+        case  7: return "Post Run";
+        case  8: return "Out of Range";   // ← ADD THIS
+        case  9: return "N/A";
+        case 10: return "Network Failure";
+        default: return "Unknown";
+    }
+}
+// ─── CAN Status Decoder ──────────────────────────────────────
+static const char* decodeCanStatus(uint16_t code) {
+    switch (code) {
+        case 0: return "Inactive";
+        case 1: return "Active";
+        case 2: return "Failed";
+        default: return "Unknown";
+    }
+}
+
+// ─── AMF State Decoder ───────────────────────────────────────
+static const char* decodeAmfState(uint16_t code) {
+    switch (code) {
+        case  0: return "AMF Not Available";
+        case  1: return "Transfer Retransfer Off";
+        case  2: return "Utility Pickup";
+        case  3: return "Utility Dropout";
+        case  4: return "Genset Starting";
+        case  5: return "Transfer Start";
+        case  6: return "Utility CB Opened";
+        case  7: return "Genset CB Closed";
+        case  8: return "Transfer Complete";
+        case  9: return "Retransfer Start";
+        case 10: return "Genset CB Opened";
+        case 11: return "Utility CB Closed";
+        case 12: return "Retransfer Complete";
+        case 13: return "Transfer Fail";
+        case 14: return "Retransfer Fail";
+        default: return "Unknown";
+    }
+}
+
+// ─── Transfer Switch Feedback Decoder ────────────────────────
+static const char* decodeXferSwitch(uint16_t code) {
+    switch (code) {
+        case 0: return "Not Available";
+        case 1: return "At Utility";
+        case 2: return "At Genset";
+        case 3: return "Unknown Open";
+        case 4: return "Unknown Closed";
+        default: return "Unknown";
+    }
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Data Structure — holds all polled values
+// ════════════════════════════════════════════════════════════════
+struct GensetData {
+    // ── Identity ──────────────────────────────────────────────
+    uint16_t deviceType;
+    char     modelNumber[22];   // 20-char string + null terminator
+    char     serialNumber[22];
+
+    // ── Status ────────────────────────────────────────────────
+    uint16_t switchPosition;    // 0=Off, 1=Auto, 2=Manual
+    uint16_t gensetState;       // 0–13
+    uint16_t faultCode;
+    uint16_t faultSeverity;     // 0=None, 1=Warning, 2=Shutdown
+    uint32_t nfpa110;           // 32-bit NFPA bitmap
+    uint16_t amberWarnLamp;     // 0=Inactive, 1=Active
+    uint16_t amfState;          // 0–14 AMF transfer state
+    uint16_t xferSwStatus;      // 0–4 Transfer switch position
+    uint16_t schedulerState;    // 0=Inactive, 1=Active, 2=Abort
+
+    // ── Genset AC Voltages L-N (V) ───────────────────────────
+    float voltL1N, voltL2N, voltL3N;
+    // ── Genset AC Voltages L-L (V) ───────────────────────────
+    float voltL1L2, voltL2L3, voltL3L1;
+    // ── Genset AC Currents (A) ───────────────────────────────
+    float currL1, currL2, currL3;
+    // ── Current % of rated ───────────────────────────────────
+    float currPctL1, currPctL2, currPctL3;
+    // ── Power ─────────────────────────────────────────────────
+    float kwL1, kwL2, kwL3, kwTotal;         // kW signed
+    float kvarL1, kvarL2, kvarL3, kvarTotal; // kVAR signed
+    float kvaL1, kvaL2, kvaL3, kvaTotal;     // kVA unsigned
+    float frequency;                          // Hz (×0.01)
+
+    // ── Utility (City/Mains) Voltages ─────────────────────────
+    float utilVoltL1N, utilVoltL2N, utilVoltL3N;   // V
+    float utilVoltL1L2, utilVoltL2L3, utilVoltL3L1; // V
+    float utilFrequency;                             // Hz (×0.001, 32-bit)
+
+    // ── Engine Electrical ─────────────────────────────────────
+    float    battVoltage;           // VDC (×0.001)
+    float    chargeAltVoltage;      // VDC (×0.001)
+    float    lowBattThreshold;      // V (×0.1) — from 403511
+    float    highBattThreshold;     // V (×0.1) — from 403676
+    uint16_t canStatus;             // 0=Inactive,1=Active,2=Failed
+
+    // ── Engine Mechanical ─────────────────────────────────────
+    float    oilPressure;           // psi (×0.1)
+    float    oilTemp;               // °F (×0.1, signed)
+    float    coolantTemp;           // °F (×0.1, signed)
+    float    coolantPressure;       // psi (×0.1, int16) — from 406124
+    float    intakeTemp;            // °F (×0.1, signed)
+    float    fuelTemp;              // °F (×0.1, signed)
+    float    exhaustTemp;           // °F (×0.1, signed) — from 400585
+    float    engineRPM;             // RPM (×0.125)
+    int16_t  engineTorquePct;       // % signed
+
+    // ── Pressures ─────────────────────────────────────────────
+    float boostPressure;            // psi (×0.1)
+    float crankcasePressure;        // psi (×0.1, signed)
+    float fuelSupplyPressure;       // psi (×0.1)
+    float fuelRailPressure;         // psi (×0.1, 32-bit) — from 400258
+
+    // ── Digital Outputs ───────────────────────────────────────
+    uint16_t fuelShutoffStatus;     // 0=Off, 1=On — fuel solenoid
+    uint16_t starterStatus;         // 0=Off, 1=On — starter relay
+
+    // ── Customer Dry Contact Inputs ───────────────────────────
+    uint16_t custInput1;            // 0=False, 1=True
+    uint16_t custInput2;
+    uint16_t custInput3;
+    uint16_t custInput4;
+    uint16_t custInput5;
+    uint16_t custInput6;
+
+    // ── Engine Hours & Counts ─────────────────────────────────
+    uint32_t engineHoursRaw;        // raw 32-bit
+    float    engineHoursF;          // computed: raw × 0.05
+    uint16_t startAttempts;
+
+    // ── Fuel ──────────────────────────────────────────────────
+    uint16_t fuelLevelPct;          // %
+    uint16_t fuelLevelL;            // Litres (from sensor A052T244)
+
+    // ── ECM State ─────────────────────────────────────────────
+    uint16_t engineOpState;         // 0–10
+
+    // ── PGI Firmware Version ──────────────────────────────────
+    uint8_t  pgiMajor;
+    uint8_t  pgiMinor;
+    uint8_t  pgiInfo;
+
+    // ── Active Fault Queues (10 rows each) ───────────────────
+    uint16_t shutdownFaults[10];    // 401002–401011
+    uint16_t warningFaults[10];     // 401012–401021 (was only 5 in original)
+
+    bool valid;
+};
+
+// ─── Globals ──────────────────────────────────────────────────
+ModbusMaster     modbus;
+HardwareSerial   modbusSerial(2);   // UART2
+GensetData       gData;
+unsigned long    lastPollMs = 0;
+
+WiFiClientSecure wifiSecure;
+PubSubClient     mqttClient(wifiSecure);
+bool             mqttReady = false;
+
+
+// ─── RS485 direction control ──────────────────────────────────
+void IRAM_ATTR preTransmission()  { digitalWrite(RS485_DE_RE_PIN, HIGH); }
+void IRAM_ATTR postTransmission() { digitalWrite(RS485_DE_RE_PIN, LOW);  }
+
+// ─── Safe single-register read ───────────────────────────────
+bool readReg16(uint16_t addr, uint16_t &out) {
+    uint8_t status = modbus.readHoldingRegisters(addr, 1);
+    if (status == ModbusMaster::ku8MBSuccess) {
+        out = modbus.getResponseBuffer(0);
+        return true;
+    }
+    Serial.printf("[MB] FAIL addr=%u (0x%04X) status=0x%02X\n", addr, addr, status);
+    return false;
+}
+
+// ─── Safe 32-bit read (HIGH word first) ──────────────────────
+bool readReg32(uint16_t addrHigh, uint32_t &out) {
+    uint8_t status = modbus.readHoldingRegisters(addrHigh, 2);
+    if (status == ModbusMaster::ku8MBSuccess) {
+        out = ((uint32_t)modbus.getResponseBuffer(0) << 16)
+              | (uint32_t)modbus.getResponseBuffer(1);
+        return true;
+    }
+    Serial.printf("[MB] FAIL addr32=%u (0x%04X) status=0x%02X\n", addrHigh, addrHigh, status);
+    return false;
+}
+
+// ─── Safe block read (multiple consecutive registers) ─────────
+bool readBlock(uint16_t startAddr, uint8_t count, uint16_t* buf) {
+    uint8_t status = modbus.readHoldingRegisters(startAddr, count);
+    if (status == ModbusMaster::ku8MBSuccess) {
+        for (uint8_t i = 0; i < count; i++)
+            buf[i] = modbus.getResponseBuffer(i);
+        return true;
+    }
+    Serial.printf("[MB] BLOCK FAIL addr=%u count=%u status=0x%02X\n", startAddr, count, status);
+    return false;
+}
+
+// ─── Read 20-char ASCII string (10 registers, 2 chars each) ──
+// CORRECT — must read 16 registers to match PDF address allocation
+// Change readStringReg call count from 16 to 10
+bool readStringReg(uint16_t startAddr, char* outBuf, uint8_t maxLen) {
+    uint16_t buf[10];                      // was 16
+    if (!readBlock(startAddr, 10, buf)) {  // was 16
+        outBuf[0] = '\0';
+        return false;
+    }
+    // Remove the incorrectly declared local vars that were never used:
+    // char modelNumber[34]; <- DELETE THIS
+    // char serialNumber[34]; <- DELETE THIS
+    uint8_t pos = 0;
+    for (uint8_t i = 0; i < 10 && pos < maxLen - 1; i++) { // was 16
+        char hi = (char)(buf[i] >> 8);
+        char lo = (char)(buf[i] & 0xFF);
+        if (hi) outBuf[pos++] = hi;
+        if (lo) outBuf[pos++] = lo;
+    }
+    outBuf[pos] = '\0';
+    return true;
+}
+
+// ─── Silent single-register read (no error log for optional regs) ─
+bool readReg16Silent(uint16_t addr, uint16_t &out) {
+    uint8_t status = modbus.readHoldingRegisters(addr, 1);
+    if (status == ModbusMaster::ku8MBSuccess) {
+        out = modbus.getResponseBuffer(0);
+        return true;
+    }
+    return false;
+}
+
+// ─── Silent 32-bit read ───────────────────────────────────────
+bool readReg32Silent(uint16_t addrHigh, uint32_t &out) {
+    uint8_t status = modbus.readHoldingRegisters(addrHigh, 2);
+    if (status == ModbusMaster::ku8MBSuccess) {
+        out = ((uint32_t)modbus.getResponseBuffer(0) << 16)
+              | (uint32_t)modbus.getResponseBuffer(1);
+        return true;
+    }
+    return false;
+}
+
+// ════════════════════════════════════════════════════════════════
+//  POLL ALL REGISTERS
+// ════════════════════════════════════════════════════════════════
+void pollModbus() {
+    uint16_t r16 = 0;
+    uint32_t r32 = 0;
+    uint16_t blk[10];
+    gData.valid = false;
+
+    // ── Identity (read once at boot is enough, but we refresh) ─
+    readReg16Silent(REG_DEVICE_TYPE, r16);
+    gData.deviceType = r16;
+
+    // ── Status block ─────────────────────────────────────────
+    if (readReg16(REG_SWITCH_POSITION, r16)) gData.switchPosition = r16;
+    if (readReg16(REG_GENSET_STATE,    r16)) gData.gensetState    = r16;
+    if (readReg16(REG_FAULT_CODE,      r16)) gData.faultCode      = r16;
+    if (readReg16(REG_FAULT_SEVERITY,  r16)) gData.faultSeverity  = r16;
+    if (readReg32(REG_NFPA110_H,       r32)) gData.nfpa110        = r32;
+    if (readReg16(REG_AMBER_WARN,      r16)) gData.amberWarnLamp  = r16;
+    if (readReg16Silent(REG_PGI_INFO, r16)) gData.pgiInfo = (uint8_t)(r16 & 0xFF);
+
+
+    // ── Genset AC Voltages L-N ────────────────────────────────
+    if (readReg16(REG_VOLT_L1N,  r16)) gData.voltL1N  = (float)r16;
+    if (readReg16(REG_VOLT_L2N,  r16)) gData.voltL2N  = (float)r16;
+    if (readReg16(REG_VOLT_L3N,  r16)) gData.voltL3N  = (float)r16;
+
+    // ── Genset AC Voltages L-L ────────────────────────────────
+    if (readReg16(REG_VOLT_L1L2, r16)) gData.voltL1L2 = (float)r16;
+    if (readReg16(REG_VOLT_L2L3, r16)) gData.voltL2L3 = (float)r16;
+    if (readReg16(REG_VOLT_L3L1, r16)) gData.voltL3L1 = (float)r16;
+
+    // ── Genset AC Currents ────────────────────────────────────
+    if (readReg16(REG_CURR_L1, r16)) gData.currL1 = (float)r16;
+    if (readReg16(REG_CURR_L2, r16)) gData.currL2 = (float)r16;
+    if (readReg16(REG_CURR_L3, r16)) gData.currL3 = (float)r16;
+
+    // ── Power kW (signed) ────────────────────────────────────
+    if (readReg16(REG_KW_L1,    r16)) gData.kwL1    = (float)(int16_t)r16;
+    if (readReg16(REG_KW_L2,    r16)) gData.kwL2    = (float)(int16_t)r16;
+    if (readReg16(REG_KW_L3,    r16)) gData.kwL3    = (float)(int16_t)r16;
+    if (readReg16(REG_KW_TOTAL, r16)) gData.kwTotal = (float)(int16_t)r16;
+
+    // ── Power kVAR (signed) ───────────────────────────────────
+    if (readReg16(REG_KVAR_L1,    r16)) gData.kvarL1    = (float)(int16_t)r16;
+    if (readReg16(REG_KVAR_L2,    r16)) gData.kvarL2    = (float)(int16_t)r16;
+    if (readReg16(REG_KVAR_L3,    r16)) gData.kvarL3    = (float)(int16_t)r16;
+    if (readReg16(REG_KVAR_TOTAL, r16)) gData.kvarTotal = (float)(int16_t)r16;
+
+    // ── Power kVA (unsigned) ──────────────────────────────────
+    if (readReg16(REG_KVA_L1,    r16)) gData.kvaL1    = (float)r16;
+    if (readReg16(REG_KVA_L2,    r16)) gData.kvaL2    = (float)r16;
+    if (readReg16(REG_KVA_L3,    r16)) gData.kvaL3    = (float)r16;
+    if (readReg16(REG_KVA_TOTAL, r16)) gData.kvaTotal = (float)r16;
+
+    // ── Frequency (×0.01 → Hz) ───────────────────────────────
+    if (readReg16(REG_FREQUENCY, r16)) gData.frequency = r16 * 0.01f;
+
+    // ── Current % (×0.1 → %) ─────────────────────────────────
+    if (readReg16(REG_CURR_PCT_L1, r16)) gData.currPctL1 = r16 * 0.1f;
+    if (readReg16(REG_CURR_PCT_L2, r16)) gData.currPctL2 = r16 * 0.1f;
+    if (readReg16(REG_CURR_PCT_L3, r16)) gData.currPctL3 = r16 * 0.1f;
+
+    // ── Battery (×0.001 → V) — addr 60 (400061) ──────────────
+    if (readReg16(REG_BATT_VOLTAGE, r16)) gData.battVoltage = r16 * 0.001f;
+
+    // ── Oil Pressure (×0.1 → psi) — addr 61 (400062) ─────────
+    // NOTE: Original had REG_OIL_PRESSURE=61 and REG_BATT_VOLTAGE=60
+    // which is CORRECT but comment said 400061=OIL which was wrong.
+    // PDF confirms: 400061=Battery(addr 60), 400062=OilPressure(addr 61).
+    if (readReg16(REG_OIL_PRESSURE,  r16)) gData.oilPressure  = r16 * 0.1f;
+
+    // ── Temperatures (×0.1 → °F, signed) ─────────────────────
+    if (readReg16(REG_OIL_TEMP,     r16)) gData.oilTemp      = (int16_t)r16 * 0.1f;
+    if (readReg16(REG_COOLANT_TEMP, r16)) gData.coolantTemp  = (int16_t)r16 * 0.1f;
+    if (readReg16(REG_INTAKE_TEMP,  r16)) gData.intakeTemp   = (int16_t)r16 * 0.1f;
+    if (readReg16(REG_FUEL_TEMP,    r16)) gData.fuelTemp     = (int16_t)r16 * 0.1f;
+
+    // ── Exhaust Gas Temp — *** FIXED: WAS NEVER READ IN ORIGINAL *** ──
+    if (readReg16(REG_EXHAUST_TEMP, r16)) gData.exhaustTemp = (int16_t)r16 * 0.1f;
+
+    // ── Engine Speed (×0.125 → RPM) ──────────────────────────
+    if (readReg16(REG_ENGINE_RPM, r16)) gData.engineRPM = r16 * 0.125f;
+
+    // ── Engine Torque % (signed) ──────────────────────────────
+    if (readReg16(REG_ENGINE_TORQUE, r16)) gData.engineTorquePct = (int16_t)r16;
+
+    // ── Pressures ─────────────────────────────────────────────
+    if (readReg16(REG_BOOST_PRESSURE,  r16)) gData.boostPressure     = r16 * 0.1f;
+    if (readReg16(REG_CRANKCASE_PRESS, r16)) gData.crankcasePressure = (int16_t)r16 * 0.1f;
+    if (readReg16(REG_FUEL_SUPPLY_PR,  r16)) gData.fuelSupplyPressure= r16 * 0.1f;
+
+    // ── Fuel Rail/Outlet Pressure — 32-bit, ×0.1 psi — *** ADDED *** ──
+    if (readReg32Silent(REG_FUEL_RAIL_PR_H, r32)) gData.fuelRailPressure = r32 * 0.1f;
+
+    // ── CAN Datalink Status ───────────────────────────────────
+    if (readReg16(REG_CAN_STATUS, r16)) gData.canStatus = r16;
+
+    // ── Charging Alternator (×0.001 → V) ─────────────────────
+    if (readReg16(REG_CHARGE_ALT_V, r16)) gData.chargeAltVoltage = r16 * 0.001f;
+
+    // ── Engine Hours (32-bit, ×0.05 → hours) ─────────────────
+    if (readReg32(REG_ENGINE_HRS_H, r32)) {
+        gData.engineHoursRaw = r32;
+        gData.engineHoursF   = r32 * 0.05f;
+    }
+    if (readReg16(REG_START_ATTEMPTS, r16)) gData.startAttempts = r16;
+
+    // ── Fuel Level ────────────────────────────────────────────
+    if (readReg16(REG_FUEL_LEVEL_PCT, r16)) gData.fuelLevelPct = r16;
+    if (readReg16(REG_FUEL_LEVEL_L,   r16)) gData.fuelLevelL   = r16;
+
+    // ── PGI Firmware Version ──────────────────────────────────
+    if (readReg16Silent(REG_PGI_MAJOR, r16)) gData.pgiMajor = (uint8_t)(r16 & 0xFF);
+    if (readReg16Silent(REG_PGI_MINOR, r16)) gData.pgiMinor = (uint8_t)(r16 & 0xFF);
+
+    // ── Utility (Mains) Voltages L-N — *** ADDED *** ─────────
+    if (readReg16(REG_UTIL_VOLT_L1N, r16)) gData.utilVoltL1N = (float)r16;
+    if (readReg16(REG_UTIL_VOLT_L2N, r16)) gData.utilVoltL2N = (float)r16;
+    if (readReg16(REG_UTIL_VOLT_L3N, r16)) gData.utilVoltL3N = (float)r16;
+
+    // ── Utility Voltages L-L — *** ADDED *** ─────────────────
+    if (readReg16(REG_UTIL_VOLT_L1L2, r16)) gData.utilVoltL1L2 = (float)r16;
+    if (readReg16(REG_UTIL_VOLT_L2L3, r16)) gData.utilVoltL2L3 = (float)r16;
+    if (readReg16(REG_UTIL_VOLT_L3L1, r16)) gData.utilVoltL3L1 = (float)r16;
+
+    // ── Utility Frequency — 32-bit, ×0.001 Hz — *** ADDED *** ──
+    if (readReg32Silent(REG_UTIL_FREQ_H, r32)) gData.utilFrequency = r32 * 0.001f;
+
+    // ── AMF State — *** ADDED *** ─────────────────────────────
+    if (readReg16Silent(REG_AMF_STATE,      r16)) gData.amfState     = r16;
+    if (readReg16Silent(REG_XFER_SW_STATUS, r16)) gData.xferSwStatus = r16;
+
+    // ── Digital Output Status — *** ADDED *** ────────────────
+    if (readReg16Silent(REG_FUEL_SHUTOFF, r16)) gData.fuelShutoffStatus = r16;
+    if (readReg16Silent(REG_STARTER_OUT,  r16)) gData.starterStatus     = r16;
+
+    // ── Customer Inputs — *** ADDED *** ──────────────────────
+    if (readReg16Silent(REG_CUST_INPUT1, r16)) gData.custInput1 = r16;
+    if (readReg16Silent(REG_CUST_INPUT2, r16)) gData.custInput2 = r16;
+    if (readReg16Silent(REG_CUST_INPUT3, r16)) gData.custInput3 = r16;
+    if (readReg16Silent(REG_CUST_INPUT4, r16)) gData.custInput4 = r16;
+    if (readReg16Silent(REG_CUST_INPUT5, r16)) gData.custInput5 = r16;
+    if (readReg16Silent(REG_CUST_INPUT6, r16)) gData.custInput6 = r16;
+
+    // ── Battery Thresholds — *** ADDED *** ───────────────────
+    if (readReg16Silent(REG_LOW_BATT_THRESH,  r16)) gData.lowBattThreshold  = r16 * 0.1f;
+    if (readReg16Silent(REG_HIGH_BATT_THRESH, r16)) gData.highBattThreshold = r16 * 0.1f;
+
+    // ── Exercise Scheduler State — *** ADDED *** ─────────────
+    if (readReg16Silent(REG_SCHEDULER_STATE, r16)) gData.schedulerState = r16;
+
+    // ── Shutdown Fault Queue — 10 rows block read ─────────────
+    if (readBlock(REG_SHUT_FAULT_1, 10, blk)) {
+        memcpy(gData.shutdownFaults, blk, sizeof(gData.shutdownFaults));
+    }
+
+    // ── Warning Fault Queue — 10 rows block read ─────────────
+    // *** ORIGINAL ONLY READ 5 ROWS — NOW READS ALL 10 ***
+    if (readBlock(REG_WARN_FAULT_1, 10, blk)) {
+        memcpy(gData.warningFaults, blk, sizeof(gData.warningFaults));
+    }
+
+    // ── ECM Engine Operating State (may not respond on all units) ──
+    {
+        uint8_t status = modbus.readHoldingRegisters(REG_ENGINE_OP_STATE, 1);
+        if (status == ModbusMaster::ku8MBSuccess)
+            gData.engineOpState = modbus.getResponseBuffer(0);
+        else
+            gData.engineOpState = 0xFF;
+    }
+
+    // ── Coolant Pressure (ECM) — *** FIXED: WAS NEVER READ *** ──
+    {
+        uint8_t status = modbus.readHoldingRegisters(REG_COOLANT_PRESS, 1);
+        if (status == ModbusMaster::ku8MBSuccess)
+            gData.coolantPressure = (int16_t)modbus.getResponseBuffer(0) * 0.1f;
+        else
+            gData.coolantPressure = 0.0f;
+    }
+
+    // ── Model & Serial Number (read silently, less critical) ──
+    readStringReg(REG_MODEL_NUM,  gData.modelNumber,  sizeof(gData.modelNumber));
+    readStringReg(REG_SERIAL_NUM, gData.serialNumber, sizeof(gData.serialNumber));
+
+    gData.valid = true;
+
+    // ── Serial monitor summary ────────────────────────────────
+    Serial.printf(
+        "[POLL] %-18s | RPM=%6.1f | Freq=%5.2fHz | kW=%5.0f | kVA=%5.0f\n"
+        "       GenV: L1=%3.0f L2=%3.0f L3=%3.0fV | I: L1=%4.0f L2=%4.0f L3=%4.0fA\n"
+        "       UtilV: L1=%3.0f L2=%3.0f L3=%3.0fV | UtilHz=%.3f | AMF=%s\n"
+        "       Cool=%.1f°F | OilP=%.1fpsi | Exh=%.1f°F | Batt=%.3fV | Fuel=%u%%(%uL)\n",
+        decodeGensetState(gData.gensetState),
+        gData.engineRPM, gData.frequency, gData.kwTotal, gData.kvaTotal,
+        gData.voltL1N, gData.voltL2N, gData.voltL3N,
+        gData.currL1,  gData.currL2,  gData.currL3,
+        gData.utilVoltL1N, gData.utilVoltL2N, gData.utilVoltL3N, gData.utilFrequency,
+        decodeAmfState(gData.amfState),
+        gData.coolantTemp, gData.oilPressure, gData.exhaustTemp,
+        gData.battVoltage, gData.fuelLevelPct, gData.fuelLevelL
+    );
+}
+
+// ════════════════════════════════════════════════════════════════
+//  MQTT — connect / reconnect
+// ════════════════════════════════════════════════════════════════
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+    // Handle commands from server → ESP32
+    // e.g. topic = "gensight/genset/cmd"  payload = {"cmd":"reset_fault"}
+    String msg;
+    for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
+    Serial.printf("[MQTT←] topic=%s  msg=%s\n", topic, msg.c_str());
+    // Future: parse cmd and write Modbus command registers
+}
+
+void mqttConnect() {
+    if (WiFi.status() != WL_CONNECTED) return;
+    wifiSecure.setInsecure();           // HiveMQ Cloud uses a trusted CA;
+                                        // setInsecure() skips cert pinning.
+                                        // For production, supply the CA cert instead.
+    mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
+    mqttClient.setCallback(mqttCallback);
+    mqttClient.setBufferSize(2048);     // JSON payload can be large
+
+    uint8_t tries = 0;
+    while (!mqttClient.connected() && tries < 5) {
+        Serial.printf("[MQTT] Connecting to %s …\n", MQTT_BROKER);
+        if (mqttClient.connect(MQTT_CLIENT_ID, MQTT_USER, MQTT_PASS)) {
+            Serial.println("[MQTT] Connected ✓");
+            mqttClient.subscribe(MQTT_TOPIC_CMD, 1);
+            mqttReady = true;
+        } else {
+            Serial.printf("[MQTT] Failed rc=%d — retry %u/5\n",
+                          mqttClient.state(), ++tries);
+            delay(2000);
+        }
+    }
+}
+
+// ─── Build JSON and POST ──────────────────────────────────────
+void sendToServer() {
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("[HTTP] WiFi not ready — skipping POST");
+        return;
+    }
+
+    // Compute power factor
+    float pf = (gData.kvaTotal > 0.1f) ? gData.kwTotal / gData.kvaTotal : 0.0f;
+
+    // Use DynamicJsonDocument — we now have more fields
+    DynamicJsonDocument doc(2048);
+
+    doc["timestamp"]           = millis();
+    doc["stateCode"]           = gData.gensetState;
+    doc["stateLabel"]          = decodeGensetState(gData.gensetState);
+    doc["faultCode"]           = gData.faultCode;
+    doc["faultSeverity"]       = gData.faultSeverity;
+    doc["nfpa110"]             = gData.nfpa110;
+    doc["switchPos"]           = gData.switchPosition;
+    doc["amberWarn"]           = gData.amberWarnLamp;
+    doc["canStatus"]           = gData.canStatus;
+    doc["canStatusLabel"]      = decodeCanStatus(gData.canStatus);
+    doc["amfState"]            = gData.amfState;
+    doc["amfStateLabel"]       = decodeAmfState(gData.amfState);
+    doc["xferSwStatus"]        = gData.xferSwStatus;
+    doc["xferSwLabel"]         = decodeXferSwitch(gData.xferSwStatus);
+    doc["schedulerState"]      = gData.schedulerState;
+    doc["fuelShutoffActive"]   = gData.fuelShutoffStatus;
+    doc["starterActive"]       = gData.starterStatus;
+    // doc["pgiVersion"]          = String(gData.pgiMajor) + "." + String(gData.pgiMinor);
+    doc["pgiVersion"] = String(gData.pgiMajor) + "." + String(gData.pgiMinor) + "." + String(gData.pgiInfo);
+
+    doc["modelNumber"]         = gData.modelNumber;
+    doc["serialNumber"]        = gData.serialNumber;
+    doc["startAttempts"]       = gData.startAttempts;
+
+    // Customer inputs
+    JsonObject inputs = doc.createNestedObject("inputs");
+    inputs["in1"] = gData.custInput1;
+    inputs["in2"] = gData.custInput2;
+    inputs["in3"] = gData.custInput3;
+    inputs["in4"] = gData.custInput4;
+    inputs["in5"] = gData.custInput5;
+    inputs["in6"] = gData.custInput6;
+
+    // Genset AC output
+    JsonObject ac = doc.createNestedObject("ac");
+    ac["voltL1N"]   = gData.voltL1N;   ac["voltL2N"]   = gData.voltL2N;   ac["voltL3N"]   = gData.voltL3N;
+    ac["voltL1L2"]  = gData.voltL1L2;  ac["voltL2L3"]  = gData.voltL2L3;  ac["voltL3L1"]  = gData.voltL3L1;
+    ac["currL1"]    = gData.currL1;    ac["currL2"]    = gData.currL2;    ac["currL3"]    = gData.currL3;
+    ac["currPctL1"] = gData.currPctL1; ac["currPctL2"] = gData.currPctL2; ac["currPctL3"] = gData.currPctL3;
+    ac["kwL1"]      = gData.kwL1;      ac["kwL2"]      = gData.kwL2;      ac["kwL3"]      = gData.kwL3;
+    ac["kwTotal"]   = gData.kwTotal;
+    ac["kvarL1"]    = gData.kvarL1;    ac["kvarL2"]    = gData.kvarL2;    ac["kvarL3"]    = gData.kvarL3;
+    ac["kvarTotal"] = gData.kvarTotal;
+    ac["kvaL1"]     = gData.kvaL1;     ac["kvaL2"]     = gData.kvaL2;     ac["kvaL3"]     = gData.kvaL3;
+    ac["kvaTotal"]  = gData.kvaTotal;
+    ac["freq"]      = gData.frequency;
+    ac["pf"]        = pf;
+
+    // Engine
+    JsonObject eng = doc.createNestedObject("engine");
+    eng["rpm"]            = gData.engineRPM;
+    eng["hours"]          = gData.engineHoursF;
+    eng["coolantTempF"]   = gData.coolantTemp;
+    eng["oilTempF"]       = gData.oilTemp;
+    eng["intakeTempF"]    = gData.intakeTemp;
+    eng["fuelTempF"]      = gData.fuelTemp;
+    eng["exhaustTempF"]   = gData.exhaustTemp;       // *** NOW ACTUALLY POPULATED ***
+    eng["oilPressPsi"]    = gData.oilPressure;
+    eng["coolantPsi"]     = gData.coolantPressure;   // *** NOW ACTUALLY POPULATED ***
+    eng["boostPressPsi"]  = gData.boostPressure;
+    eng["crankPressPsi"]  = gData.crankcasePressure;
+    eng["fuelPressPsi"]   = gData.fuelSupplyPressure;
+    eng["fuelRailPsi"]    = gData.fuelRailPressure;  // *** NEW ***
+    eng["torquePct"]      = gData.engineTorquePct;
+    eng["opState"]        = gData.engineOpState;
+    eng["opStateLabel"]   = decodeEngineOpState(gData.engineOpState);
+
+    // Electrical
+    JsonObject elec = doc.createNestedObject("electrical");
+    elec["battV"]           = gData.battVoltage;
+    elec["chargeAltV"]      = gData.chargeAltVoltage;
+    elec["lowBattThresh"]   = gData.lowBattThreshold;   // *** NEW ***
+    elec["highBattThresh"]  = gData.highBattThreshold;  // *** NEW ***
+
+    // Fuel
+    JsonObject fuel = doc.createNestedObject("fuel");
+    fuel["pct"]    = gData.fuelLevelPct;
+    fuel["litres"] = gData.fuelLevelL;
+
+    // Utility / Mains — *** COMPLETELY NEW SECTION ***
+    JsonObject util = doc.createNestedObject("utility");
+    util["voltL1N"]  = gData.utilVoltL1N;  util["voltL2N"]  = gData.utilVoltL2N;  util["voltL3N"]  = gData.utilVoltL3N;
+    util["voltL1L2"] = gData.utilVoltL1L2; util["voltL2L3"] = gData.utilVoltL2L3; util["voltL3L1"] = gData.utilVoltL3L1;
+    util["freq"]     = gData.utilFrequency;
+
+    // Fault queues — *** NOW ALL 10 ROWS, WAS ONLY 5 WARNING ROWS ***
+    JsonArray sdFaults = doc.createNestedArray("shutdownFaults");
+    for (int i = 0; i < 10; i++) sdFaults.add(gData.shutdownFaults[i]);
+
+    JsonArray warnFaults = doc.createNestedArray("warningFaults");
+    for (int i = 0; i < 10; i++) warnFaults.add(gData.warningFaults[i]);
+
+    String payload;
+    serializeJson(doc, payload);
+
+    // ── Publish via MQTT (primary transport) ─────────────────
+    if (mqttReady && mqttClient.connected()) {
+        bool ok = mqttClient.publish(MQTT_TOPIC_DATA, payload.c_str(), false);
+        Serial.printf("[MQTT→] publish %s  (%u bytes)\n",
+                      ok ? "OK" : "FAIL", payload.length());
+    } else {
+        Serial.println("[MQTT] Not connected — falling back to HTTP");
+    }
+
+    // ── HTTP POST (fallback / parallel) ──────────────────────
+    // (your existing HTTPClient block stays here unchanged)
+
+    HTTPClient http;
+    // http.begin(SERVER_URL);
+    http.addHeader("Content-Type", "application/json");
+    http.setTimeout(3000);
+
+    int code = http.POST(payload);
+    if (code > 0)
+        Serial.printf("[HTTP] POST %d  (%u bytes)\n", code, payload.length());
+    else
+        Serial.printf("[HTTP] POST FAILED: %s\n", http.errorToString(code).c_str());
+    http.end();
+}
+
+// ─── WiFi connect ─────────────────────────────────────────────
+void connectWiFi() {
+    Serial.printf("[WiFi] Connecting to \"%s\"\n", WIFI_SSID);
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    uint8_t tries = 0;
+    while (WiFi.status() != WL_CONNECTED && tries < 40) {
+        delay(500); Serial.print('.'); tries++;
+    }
+    Serial.println();
+    if (WiFi.status() == WL_CONNECTED) {
+    Serial.printf("[WiFi] Connected ✓  IP: %s\n", WiFi.localIP().toString().c_str());
+    digitalWrite(WIFI_LED_PIN, HIGH);   // solid ON
+} else {
+    Serial.println("[WiFi] Failed — will retry on next cycle");
+    digitalWrite(WIFI_LED_PIN, LOW);
+}
+}
+
+// ════════════════════════════════════════════════════════════════
+//  SETUP
+// ════════════════════════════════════════════════════════════════
+void setup() {
+    Serial.begin(115200);
+    delay(500);
+    Serial.println("\n╔══════════════════════════════════════════════════════════════╗");
+    Serial.println("║  Cummins 400kVA DG Monitor  ·  PS0600  ·  A029X159 Issue 29 ║");
+    Serial.println("╚══════════════════════════════════════════════════════════════╝");
+
+    pinMode(RS485_DE_RE_PIN, OUTPUT);
+    digitalWrite(RS485_DE_RE_PIN, LOW);
+    pinMode(WIFI_LED_PIN, OUTPUT);
+digitalWrite(WIFI_LED_PIN, LOW);
+
+    // ── RS485 / Modbus ────────────────────────────────────────
+modbusSerial.begin(RS485_BAUD_RATE, SERIAL_8N1, RS485_RX_PIN, RS485_TX_PIN);
+modbus.begin(MODBUS_SLAVE_ID, modbusSerial);
+modbus.preTransmission(preTransmission);
+modbus.postTransmission(postTransmission);
+
+    Serial.printf("[MB]  Slave=%d | Baud=%d | RX:GPIO%d  TX:GPIO%d  DE/RE:GPIO%d\n",
+        MODBUS_SLAVE_ID, RS485_BAUD_RATE,
+        RS485_RX_PIN, RS485_TX_PIN, RS485_DE_RE_PIN);
+
+    memset(&gData, 0, sizeof(gData));
+
+    connectWiFi();
+    mqttConnect();
+    Serial.println("[SYS] Setup complete — entering polling loop\n");
+}
+
+// ════════════════════════════════════════════════════════════════
+//  LOOP
+// ════════════════════════════════════════════════════════════════
+void loop() {
+    unsigned long now = millis();
+
+    // WiFi reconnect watchdog (every 15 seconds if disconnected)
+    // WiFi status LED handling
+if (WiFi.status() != WL_CONNECTED) {
+    // Blink LED while disconnected
+    static unsigned long lastBlinkMs = 0;
+    static bool ledState = false;
+    if (now - lastBlinkMs >= 300) {   // blink every 300ms
+        lastBlinkMs = now;
+        ledState = !ledState;
+        digitalWrite(WIFI_LED_PIN, ledState ? HIGH : LOW);
+    }
+
+    // WiFi reconnect watchdog (every 15 seconds)
+    static unsigned long lastWifiRetry = 0;
+    if (now - lastWifiRetry > 15000) {
+        lastWifiRetry = now;
+        Serial.println("[WiFi] Reconnecting…");
+        connectWiFi();
+    }
+} else {
+    digitalWrite(WIFI_LED_PIN, HIGH);  // solid ON when connected
+}
+
+    // Poll & send every POLL_INTERVAL_MS
+    if (now - lastPollMs >= POLL_INTERVAL_MS) {
+        lastPollMs = now;
+        pollModbus();
+        if (gData.valid) sendToServer();
+    }
+
+    // ── MQTT keepalive & reconnect watchdog ───────────────────
+    if (mqttReady || WiFi.status() == WL_CONNECTED) {
+        if (!mqttClient.connected()) {
+            static unsigned long lastMqttRetry = 0;
+            if (now - lastMqttRetry > 10000) {
+                lastMqttRetry = now;
+                Serial.println("[MQTT] Reconnecting…");
+                mqttConnect();
+            }
+        } else {
+            mqttClient.loop();   // must be called regularly
+        }
+    }
+
+    yield();
+}
+
+
+///blue down
+// grey up
