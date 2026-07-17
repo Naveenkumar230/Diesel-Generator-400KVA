@@ -10,8 +10,8 @@
 
   const TANK_CAP = 780;
 
-  function todayKey() {
-    return new Date().toISOString().slice(0, 10);
+function todayKey() {
+    return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
   }
 
   function getSession() {

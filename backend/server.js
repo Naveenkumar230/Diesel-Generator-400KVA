@@ -1,4 +1,5 @@
 'use strict';
+process.env.TZ = 'Asia/Kolkata';   // ← add this as the very first line
 require('dotenv').config();
 const mqtt = require('mqtt');
 const express    = require('express');
@@ -9,8 +10,7 @@ const path       = require('path');
 const { MongoClient } = require('mongodb');
 
 
-const { tplLowFuel, tplOverload, tplFrequency, tplPowerFactor, tplRpm, tplDailySummary, sendEmail } = require('./email.js');
-
+const { tplLowFuel, tplOverload, tplFrequency, tplPowerFactor, tplRpm, tplDailySummary, tplServiceDue, sendEmail } = require('./email.js');
 const PORT            = process.env.PORT || 3000;
 const MAX_HISTORY     = 60;    // live rolling window (~2 min at 2s polls)
 const MAX_DAY_POINTS  = 43200; // 24h at 2s = 43200 points max per day
@@ -429,11 +429,10 @@ function emptyDayRecord() {
     return rec;
 }
 
+// server.js
 function todayKey() {
-    const d = new Date();
-    return d.toISOString().slice(0, 10);
+    return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 }
-
 
 function checkAlertThresholds(row, payload) {
   const to = gensetSettings.alertEmails;
@@ -519,7 +518,8 @@ const liveHistory = {};
 HISTORY_KEYS.forEach(k => { liveHistory[k] = []; });
 
 function appendHistory(payload) {
-  const ts   = new Date().toLocaleTimeString('en-IN', { hour12: false });
+// in appendHistory():
+const ts = new Date().toLocaleTimeString('en-IN', { hour12: false, timeZone: 'Asia/Kolkata' });
   const ac   = payload.ac         || {};
   const eng  = payload.engine     || {};
   const fuel = payload.fuel       || {};

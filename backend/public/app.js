@@ -150,6 +150,103 @@ initGauge('gTemp', {
 // ════════════════════════════════════════════════════════════════
 const TANK_CAPACITY = 780;
 
+
+
+// ════════════════════════════════════════════════════════════════
+//  TODAY'S ENGINE RUNTIME TRACKER (resets at local midnight IST)
+// ════════════════════════════════════════════════════════════════
+function _todayKeyIST() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+}
+
+// ── Fetch the real start-of-day fuel level from server history ────
+window._fuelDayKey        = null;
+window._fuelSessionStart  = null;
+window._fuelSessionStartPct = null;
+window._fuelSessionFetching = false;
+
+async function fetchTodayStartFuel() {
+  if (window._fuelSessionFetching) return;
+  window._fuelSessionFetching = true;
+  const todayKey = _todayKeyIST();
+  try {
+    const r = await fetch(`/api/history?from=${todayKey}&to=${todayKey}`);
+    const json = await r.json();
+    const litresArr = json.fuelLevelL || [];
+    const pctArr    = json.fuelLevelPct || [];
+    const firstIdx  = litresArr.findIndex(v => typeof v === 'number' && v > 0);
+    if (firstIdx !== -1) {
+      window._fuelSessionStart    = litresArr[firstIdx];
+      window._fuelSessionStartPct = pctArr[firstIdx] || 0;
+      window._fuelDayKey          = todayKey;
+    }
+  } catch (e) {
+    console.warn('[Fuel] Could not fetch today start fuel:', e.message);
+  } finally {
+    window._fuelSessionFetching = false;
+  }
+}
+
+const ENG_HOURS_STORAGE_KEY = 'gensight_engHoursToday';
+
+function _loadEngHoursToday() {
+  try {
+    const raw = localStorage.getItem(ENG_HOURS_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    // Only trust the saved value if it's from *today* — otherwise it's stale
+    if (parsed && parsed.dateKey === _todayKeyIST() && typeof parsed.seconds === 'number') {
+      return parsed;
+    }
+  } catch (e) {
+    console.warn('[EngHours] Could not read localStorage:', e.message);
+  }
+  return null;
+}
+
+function _saveEngHoursToday(dateKey, seconds) {
+  try {
+    localStorage.setItem(ENG_HOURS_STORAGE_KEY, JSON.stringify({ dateKey, seconds }));
+  } catch (e) {
+    console.warn('[EngHours] Could not write localStorage:', e.message);
+  }
+}
+
+const _savedEngHours     = _loadEngHoursToday();
+let _engTodayDateKey     = _savedEngHours ? _savedEngHours.dateKey : _todayKeyIST();
+let _engTodaySeconds     = _savedEngHours ? _savedEngHours.seconds : 0;
+let _engTodayLastTs      = null;
+let _engTodayLastSaveMs  = 0;
+
+function updateEngineHoursToday(isRunning) {
+  const nowKey = _todayKeyIST();
+  if (nowKey !== _engTodayDateKey) {
+    // Midnight rollover — reset the counter for the new day
+    _engTodayDateKey = nowKey;
+    _engTodaySeconds = 0;
+    _engTodayLastTs  = null;
+    _saveEngHoursToday(_engTodayDateKey, _engTodaySeconds);
+  }
+
+  const now = Date.now();
+  if (_engTodayLastTs !== null) {
+    const deltaSec = (now - _engTodayLastTs) / 1000;
+    // Ignore absurd gaps (tab backgrounded, laptop sleep, etc.)
+    if (isRunning && deltaSec > 0 && deltaSec < 120) {
+      _engTodaySeconds += deltaSec;
+    }
+  }
+  _engTodayLastTs = now;
+
+  // Throttle writes — once every ~10s is plenty, avoids hammering localStorage on every poll
+  if (now - _engTodayLastSaveMs > 10000) {
+    _engTodayLastSaveMs = now;
+    _saveEngHoursToday(_engTodayDateKey, _engTodaySeconds);
+  }
+
+  return _engTodaySeconds / 3600; // hours
+}
+
 const dayStore = {
   timestamps: [],
   voltL1N: [], voltL2N: [], voltL3N: [],
@@ -193,6 +290,11 @@ function pushDayStore(latest) {
   const aCalc2 = calcAmps(kwL2, vL2 || vAvg, pf || 0.88);
   const aCalc3 = calcAmps(kwL3, vL3 || vAvg, pf || 0.88);
   const fuelPct = parseInt(fuel.pct) || 0;
+const fuelLitresReal = (fuel.litres != null && !isNaN(parseFloat(fuel.litres)) && parseFloat(fuel.litres) > 0)
+  ? Math.round(parseFloat(fuel.litres))
+  : Math.round(fuelPct * TANK_CAPACITY / 100);
+dayStore.fuelPct.push(fuelPct);
+dayStore.fuelLitres.push(fuelLitresReal);
 
   dayStore.timestamps.push(ts);
   dayStore.voltL1N.push(vL1); dayStore.voltL2N.push(vL2); dayStore.voltL3N.push(vL3);
@@ -228,8 +330,6 @@ function pushDayStore(latest) {
   dayStore.crankcasePsi.push(parseFloat(eng.crankPressPsi) || 0);
   dayStore.fuelSupplyPsi.push(parseFloat(eng.fuelPressPsi) || 0);
   dayStore.coolantPsi.push(parseFloat(eng.coolantPsi) || 0);
-  dayStore.fuelPct.push(fuelPct);
-  dayStore.fuelLitres.push(Math.round(fuelPct * TANK_CAPACITY / 100));
   dayStore.uVL1N.push(parseFloat(util.voltL1N) || 0);
   dayStore.uVL2N.push(parseFloat(util.voltL2N) || 0);
   dayStore.uVL3N.push(parseFloat(util.voltL3N) || 0);
@@ -982,23 +1082,23 @@ function render(latest, history) {
 //  FUEL RENDER — Replace the entire "── Fuel ──" block in render()
 
 const fpct    = parseInt(fuel.pct) || 0;
-const fLitres = Math.round(fpct * TANK_CAPACITY / 100);
+const fLitres = (fuel.litres != null && !isNaN(parseFloat(fuel.litres)) && parseFloat(fuel.litres) > 0)
+  ? Math.round(parseFloat(fuel.litres))
+  : Math.round(fpct * TANK_CAPACITY / 100); // fallback only if PLC litres register unavailable
 const fEmpty  = TANK_CAPACITY - fLitres;
 
 // --- Session tracking (stored in window so it persists across render() calls) ---
-if (!window._fuelSessionStart) {
-  window._fuelSessionStart = fLitres > 0 ? fLitres : null;
-  window._fuelSessionStartPct = fpct > 0 ? fpct : null;
+// --- Session tracking pinned to real midnight (server-sourced) ---
+const todayKey = _todayKeyIST();
+if (window._fuelDayKey !== todayKey) {
+  fetchTodayStartFuel(); // async — fills in window._fuelSessionStart when ready
 }
-if (fLitres > 0 && window._fuelSessionStart === null) {
-  window._fuelSessionStart = fLitres;
-  window._fuelSessionStartPct = fpct;
-}
-const sessionStartL   = window._fuelSessionStart   || fLitres;
-const sessionStartPct = window._fuelSessionStartPct || fpct;
-const sessionConsumed = Math.max(0, sessionStartL - fLitres);
-const sessionConsumedPct = Math.max(0, sessionStartPct - fpct);
 
+const sessionReady       = window._fuelSessionStart != null;
+const sessionStartL      = sessionReady ? window._fuelSessionStart    : null;
+const sessionStartPct    = sessionReady ? window._fuelSessionStartPct : null;
+const sessionConsumed    = sessionReady ? Math.max(0, sessionStartL - fLitres)   : null;
+const sessionConsumedPct = sessionReady ? Math.max(0, sessionStartPct - fpct)    : null;
 // --- Current load ---
 const kw_fuel = parseFloat(ac.kwTotal) || 0;
 const loadPct_fuel = Math.min(100, Math.round(kw_fuel / 320 * 100));
@@ -1021,30 +1121,48 @@ if (loadPct_fuel >= 87) {
 }
 
 // --- Actual burn rate calculation ---
+// --- Actual burn rate calculation ---
 const fuelHistory = dayStore.fuelPct;
+const tsHistory   = dayStore.timestamps;
 let actualBurnRate = 0;
 if (fuelHistory.length > 10) {
-  const oldest = fuelHistory[Math.max(0, fuelHistory.length - 30)];
-  const newest = fuelHistory[fuelHistory.length - 1];
+  const windowSize = Math.min(30, fuelHistory.length);
+  const oldest    = fuelHistory[fuelHistory.length - windowSize];
+  const newest    = fuelHistory[fuelHistory.length - 1];
+  const oldestTs  = tsHistory[tsHistory.length - windowSize];
+  const newestTs  = tsHistory[tsHistory.length - 1];
   const deltaLitres = (oldest - newest) * TANK_CAPACITY / 100;
-  const deltaHrs = Math.min(30, fuelHistory.length) * 2 / 3600;
-  actualBurnRate = deltaHrs > 0 && deltaLitres > 0 ? deltaLitres / deltaHrs : 0;
+  const parseSec = s => {
+    const p = String(s).split(':').map(Number);
+    return (p.length >= 3 && !p.some(isNaN)) ? p[0] * 3600 + p[1] * 60 + p[2] : null;
+  };
+  const t0 = parseSec(oldestTs);
+  const t1 = parseSec(newestTs);
+  let deltaHrs = 0;
+  if (t0 !== null && t1 !== null) {
+    let diff = t1 - t0;
+    if (diff < 0) diff += 86400;
+    deltaHrs = diff / 3600;
+  }
+  actualBurnRate = deltaHrs > 0.001 && deltaLitres > 0 ? deltaLitres / deltaHrs : 0;
 }
 
 const burnForRuntime = actualBurnRate > 0 ? actualBurnRate : expectedBurn;
 const hoursLeft = burnForRuntime > 0 ? fLitres / burnForRuntime : 0;
-const engHours = parseFloat(eng.hours) || 0;
+const engHours = parseFloat(eng.hours) || 0; // lifetime meter — kept for other fields, do not remove
+
+// ── Today-only runtime (resets at local midnight) ──────────────
+const rpm_forToday = parseFloat(eng.rpm) || 0;
+const isRunningNow = rpm_forToday > 100 || kw_fuel > 1;
+const engHoursToday = updateEngineHoursToday(isRunningNow);
 
 // ── Session Strip ──────────────────────────────────────────────
-setText('fuelSessionStart',    sessionStartL    + ' L');
-setText('fuelSessionStartPct', sessionStartPct  + '%');
+setText('fuelSessionStart',    sessionReady ? sessionStartL + ' L' : '— (loading baseline)');
+setText('fuelSessionStartPct', sessionReady ? sessionStartPct + '%' : '—');
 setText('fuelCurrentStock',    fLitres          + ' L');
 setText('fuelCurrentPct',      fpct             + '%');
-setText('fuelConsumedSession', sessionConsumed  + ' L');
-setText('fuelConsumedPct',     sessionConsumedPct.toFixed(0) + '%');
-setText('fuelEngHours',        engHours.toFixed(0) + ' h');
-setText('fuelCurrentLoad',     kw_fuel.toFixed(1) + ' kW');
-setText('fuelLoadPct',         loadPct_fuel + '% of 320 kW rated');
+setText('fuelConsumedSession', sessionReady ? sessionConsumed + ' L' : '—');
+setText('fuelConsumedPct',     sessionReady ? sessionConsumedPct.toFixed(0) + '%' : '—');
 
 // ── Tank Visual ────────────────────────────────────────────────
 const tank3dEl = $('tank3dFill');
@@ -1502,9 +1620,10 @@ if (socket) {
   let activeTrend    = 'all';
   let currentIsRange = false;
 
-  function xScale() {
-    return { ticks: { font: { family: 'JetBrains Mono', size: 9 }, maxTicksLimit: 12, color: '#8A9BB5' }, grid: { color: 'rgba(37,99,235,.06)' } };
+ function xScale() {
+    return { ticks: { font: { family: 'JetBrains Mono', size: 9 }, maxTicksLimit: 48, color: '#8A9BB5' }, grid: { color: 'rgba(37,99,235,.06)' } };
   }
+
   function yScale(pos = 'left') {
     return { position: pos, ticks: { font: { family: 'JetBrains Mono', size: 9 }, color: '#8A9BB5' }, grid: { color: pos === 'left' ? 'rgba(37,99,235,.06)' : 'transparent' } };
   }
@@ -1514,6 +1633,20 @@ if (socket) {
     if (!v.length) return { min: 0, max: 0, avg: 0, last: 0 };
     return { min: +Math.min(...v).toFixed(3), max: +Math.max(...v).toFixed(3), avg: +(v.reduce((a, b) => a + b, 0) / v.length).toFixed(3), last: +v[v.length - 1].toFixed(3) };
   }
+
+  function elapsedHoursFromTimestamps(ts) {
+  if (!ts || ts.length < 2) return 0;
+  const parseSec = s => {
+    const p = String(s).split(':').map(Number);
+    return (p.length >= 3 && !p.some(isNaN)) ? p[0] * 3600 + p[1] * 60 + p[2] : null;
+  };
+  const first = parseSec(ts[0]);
+  const last  = parseSec(ts[ts.length - 1]);
+  if (first === null || last === null) return 0;
+  let diff = last - first;
+  if (diff < 0) diff += 86400; // safety for midnight wraparound
+  return diff / 3600;
+}
 
 function buildStatsHTML(section, data) {
   const TANK = 780;
@@ -1537,19 +1670,32 @@ function buildStatsHTML(section, data) {
     const hoursArr    = data.torquePct      || []; // fallback — hours not in history keys directly
 
     // ── Core values ──────────────────────────────────────────
-    const startPct  = pctArr.length    ? pctArr[0]                         : 0;
+const haveStableStart = !currentIsRange
+      && window._fuelSessionStart != null
+      && typeof window._fuelSessionStart === 'number';
+
     const endPct    = pctArr.length    ? pctArr[pctArr.length - 1]         : 0;
-    const startL    = litresArr.length ? litresArr[0]                      : Math.round(startPct * TANK / 100);
-    const endL      = litresArr.length ? litresArr[litresArr.length - 1]   : Math.round(endPct   * TANK / 100);
-    const consumedL   = Math.max(0, startL - endL);
-    const consumedPct = Math.max(0, startPct - endPct);
+    const endL      = litresArr.length ? litresArr[litresArr.length - 1]   : Math.round(endPct * TANK / 100);
+    // If the real midnight baseline hasn't loaded yet, do NOT fall back to
+    // litresArr[0] — that's a sliding 120-point window that changes on every
+    // render and produces a fake, drifting "consumed" number. Show unknown instead.
+    const startPct  = haveStableStart ? window._fuelSessionStartPct : null;
+    const startL    = haveStableStart ? window._fuelSessionStart    : null;
+    const consumedL   = haveStableStart ? Math.max(0, startL - endL)   : null;
+    const consumedPct = haveStableStart ? Math.max(0, startPct - endPct) : null;
     const remainPct   = Math.min(100, Math.round(endPct));
     const usedPct     = Math.min(100, Math.round(consumedPct));
     const emptyL      = TANK - endL;
 
     // ── Burn rate ────────────────────────────────────────────
-    const hrs         = (pctArr.length * 2) / 3600;
-    const burnRateLHr = hrs > 0 && consumedL > 0 ? +(consumedL / hrs).toFixed(1) : 0;
+   // ── Burn rate ────────────────────────────────────────────
+    // Use real elapsed clock time from the timestamps array instead of
+    // assuming a fixed 2s/point interval — the ESP32 actually polls every
+    // 5s (POLL_INTERVAL_MS), and that mismatch was making the burn rate
+    // (and everything derived from it) drift every time new data arrived.
+    const hrs         = elapsedHoursFromTimestamps(data.timestamps);
+    const burnRateLHr = hrs > 0.01 && consumedL > 0 ? +(consumedL / hrs).toFixed(1) : 0;
+
 
     // ── Load & expected burn ─────────────────────────────────
     const curKW     = kwArr.length  ? kwArr[kwArr.length - 1]   : 0;
@@ -1853,19 +1999,58 @@ function buildStatsHTML(section, data) {
     });
   }
 
-  function renderDetailCharts(section, data, isRange) {
-    const labels = data.timestamps || [];
+  // ── 24-HOUR GRID HELPERS ──────────────────────────────────────
+const DAY_GRID_INTERVAL_SEC = 120; // one slot every 2 min = 720 points/day
+
+function buildDayGridLabels(intervalSec = DAY_GRID_INTERVAL_SEC) {
+  const labels = [];
+  for (let s = 0; s < 86400; s += intervalSec) {
+    const hh = String(Math.floor(s / 3600)).padStart(2, '0');
+    const mm = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
+    const ss = String(s % 60).padStart(2, '0');
+    labels.push(`${hh}:${mm}:${ss}`);
+  }
+  return labels;
+}
+
+function alignSeriesToDayGrid(gridLabels, rawTimestamps, rawValues, intervalSec = DAY_GRID_INTERVAL_SEC) {
+  const sums   = new Array(gridLabels.length).fill(0);
+  const counts = new Array(gridLabels.length).fill(0);
+  (rawTimestamps || []).forEach((ts, i) => {
+    const p = String(ts).split(':').map(Number);
+    if (p.length < 3 || p.some(isNaN)) return;
+    const secs = p[0] * 3600 + p[1] * 60 + p[2];
+    const idx = Math.min(gridLabels.length - 1, Math.floor(secs / intervalSec));
+    const v = rawValues ? rawValues[i] : null;
+    if (typeof v === 'number' && !isNaN(v)) { sums[idx] += v; counts[idx] += 1; }
+  });
+  return gridLabels.map((_, i) => counts[i] > 0 ? +(sums[i] / counts[i]).toFixed(2) : null);
+}
+
+
+ function renderDetailCharts(section, data, isRange) {
+    let labels = data.timestamps || [];
+    let getSeries = (key) => data[key] || [];
+
+    if (!isRange) {
+      // Single-day view → force a full 00:00:00–23:59:xx axis
+      const gridLabels = buildDayGridLabels();
+      labels = gridLabels;
+      getSeries = (key) => alignSeriesToDayGrid(gridLabels, data.timestamps, data[key]);
+    }
+
     section.charts.forEach(ch => {
       const canvas = document.getElementById(ch.id);
       if (!canvas) return;
       const useBar = isRange || ch.bar;
       const datasets = ch.datasets.map(ds => ({
-        label: ds.label, data: data[ds.key] || [],
+        label: ds.label, data: getSeries(ds.key),
         borderColor: ds.color,
         backgroundColor: useBar ? ds.color + 'BB' : ds.color + '18',
         borderWidth: useBar ? 0 : 2,
         borderRadius: useBar ? 6 : 0,
         tension: 0.35, pointRadius: (!useBar && labels.length < 120) ? 2 : 0,
+        spanGaps: false,
         fill: ds.fill || false, yAxisID: ds.yAxis || 'y'
       }));
       const scales = ch.dualAxis
@@ -2036,8 +2221,8 @@ function seedFromDayStore(sectionKey) {
     a.click();
   }
 
-  function todayStr()    { return new Date().toISOString().slice(0, 10); }
-  function daysAgoStr(n) { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString().slice(0, 10); }
+function todayStr()    { return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }); }
+  function daysAgoStr(n) { const d = new Date(); d.setDate(d.getDate() - n); return d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }); }
 
   function openDetail(sectionKey) {
     const section = SECTIONS[sectionKey];
@@ -2118,7 +2303,7 @@ function seedFromDayStore(sectionKey) {
       gensetState: latest.stateCode || 0, faultCode: latest.faultCode || 0,
       amfState: latest.amfState || 0, xferSwStatus: latest.xferSwStatus || 0
     };
-    const MAX = 300;
+    const MAX = 43200; // full 24h @ 2s poll interval
     currentData.timestamps.push(new Date().toLocaleTimeString('en-IN', { hour12: false }));
     if (currentData.timestamps.length > MAX) currentData.timestamps.shift();
     Object.keys(map).forEach(k => {
@@ -2126,11 +2311,19 @@ function seedFromDayStore(sectionKey) {
       currentData[k].push(map[k]);
       if (currentData[k].length > MAX) currentData[k].shift();
     });
+    const gridLabels = currentIsRange ? null : buildDayGridLabels();
     section.charts.forEach(ch => {
       const chart = detailCharts[ch.id];
       if (!chart) return;
-      chart.data.labels = currentData.timestamps;
-      ch.datasets.forEach((ds, i) => { if (chart.data.datasets[i]) chart.data.datasets[i].data = currentData[ds.key] || []; });
+      if (gridLabels) {
+        chart.data.labels = gridLabels;
+        ch.datasets.forEach((ds, i) => {
+          if (chart.data.datasets[i]) chart.data.datasets[i].data = alignSeriesToDayGrid(gridLabels, currentData.timestamps, currentData[ds.key]);
+        });
+      } else {
+        chart.data.labels = currentData.timestamps;
+        ch.datasets.forEach((ds, i) => { if (chart.data.datasets[i]) chart.data.datasets[i].data = currentData[ds.key] || []; });
+      }
       chart.update('none');
     });
     const statsRow = document.querySelector('.gsd-stats-row');
