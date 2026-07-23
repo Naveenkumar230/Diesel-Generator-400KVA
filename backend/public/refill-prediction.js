@@ -6,7 +6,7 @@
 
 (function () {
 
-  const TANK_CAPACITY = 780;
+  const TANK_CAPACITY = 785;
 
   // ── CSS ──────────────────────────────────────────────────────
   const STYLE = `
@@ -445,16 +445,25 @@
     const cardRow = fuelSection.querySelector('.card-row.fuel-detail-row');
     if (!cardRow) return;
 
-    const wrapper = document.createElement('div');
-wrapper.style.cssText = 'grid-column:1/-1;width:100%;max-width:100%;box-sizing:border-box;overflow:hidden;';
+  const wrapper = document.createElement('div');
+wrapper.style.cssText = 'grid-column:1/-1;width:100%;max-width:100%;box-sizing:border-box;overflow:hidden;cursor:pointer;';
+wrapper.addEventListener('click', (e) => {
+  e.stopPropagation();                    // don't let this open the Fuel overlay
+  if (e.target.closest('button')) return; // let Refresh/Manual buttons work normally
+  toggleRefillDetail();                   // opens the refill-specific detail view
+});
     wrapper.innerHTML = `
       <div class="refill-tracker-card" id="refillTrackerCard">
 
         <div class="rtc-header">
-          <div class="rtc-title">
-            ⛽ Refill History &amp; Tracker
-            <span class="rtc-badge" id="rtcBadge">0 refills</span>
+          <div class="rtc-title-row">
+            <div class="rtc-title">
+              ⛽ Refill History &amp; Tracker
+              <span class="rtc-badge" id="rtcBadge">0 refills</span>
+            </div>
+            <span class="rtc-chevron" id="rtcChevron">▾</span>
           </div>
+          
           <div class="rtc-actions">
             <button class="rtc-btn green" id="rtcManualBtn">➕ Manual</button>
             <button class="rtc-btn" id="rtcRefreshBtn">🔄 Refresh</button>
@@ -724,6 +733,242 @@ wrapper.style.cssText = 'grid-column:1/-1;width:100%;max-width:100%;box-sizing:b
       setTimeout(() => showPopup(record), 800);
       renderRefillCard();
     });
+  }
+
+  // ════════════════════════════════════════════════════════════
+  //  REFILL PREDICTION ENGINE
+  //  Rolling burn rate + forecasted refill date, not just a
+  //  raw "hours left" number — this is what makes it trustworthy.
+  // ════════════════════════════════════════════════════════════
+  const LOW_FUEL_PCT = 20; // the level we predict "next refill needed by"
+
+  function _parseClockSec(ts) {
+    const p = String(ts).split(':').map(Number);
+    return (p.length >= 3 && !p.some(isNaN)) ? p[0]*3600 + p[1]*60 + p[2] : null;
+  }
+
+let _burnCache = null; // { result, ts }
+  const BURN_CACHE_TTL_MS = 60000;
+
+  async function computeRollingBurn(hoursWindow = 6) {
+    if (_burnCache && (Date.now() - _burnCache.ts) < BURN_CACHE_TTL_MS) {
+      return _burnCache.result;
+    }
+
+    // Instant path: use whatever's already in memory (dayStore) first —
+    // no network wait. Only hit the server if dayStore is too thin.
+    let pctArr = (typeof dayStore !== 'undefined' && dayStore.fuelPct) ? dayStore.fuelPct : null;
+    let tsArr  = (typeof dayStore !== 'undefined' && dayStore.timestamps) ? dayStore.timestamps : null;
+
+    if (!pctArr || pctArr.length < 10) {
+      try {
+        const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+        const r = await fetch(`/api/history?from=${today}&to=${today}`);
+        if (r.ok) {
+          const json = await r.json();
+          if (json.fuelLevelPct && json.fuelLevelPct.length >= 5) {
+            pctArr = json.fuelLevelPct;
+            tsArr  = json.timestamps;
+          }
+        }
+      } catch (e) { /* keep whatever dayStore had, even if thin */ }
+    }
+
+    if (!pctArr) {
+      const result = { rate: 0, confidence: 'low', samples: 0 };
+      _burnCache = { result, ts: Date.now() };
+      return result;
+    }
+
+    const n = pctArr.length;
+    let totalConsumedL = 0, totalHrs = 0;
+    const rates = [];
+
+    for (let i = n - 1; i > 0; i--) {
+      const t1 = _parseClockSec(tsArr[i]), t0 = _parseClockSec(tsArr[i - 1]);
+      if (t1 === null || t0 === null) continue;
+      let dtSec = t1 - t0;
+      if (dtSec < 0) dtSec += 86400;
+      const dtHr = dtSec / 3600;
+      if (totalHrs + dtHr > hoursWindow) break;
+
+      const dPct = pctArr[i - 1] - pctArr[i];
+      if (dPct > 0 && dtHr > 0) {
+        const dL = dPct * TANK_CAPACITY / 100;
+        totalConsumedL += dL;
+        totalHrs += dtHr;
+        rates.push(dL / dtHr);
+      } else {
+        totalHrs += dtHr;
+      }
+    }
+
+    let result;
+    if (totalHrs < 0.25 || rates.length < 3) {
+      result = { rate: 0, confidence: 'low', samples: rates.length };
+    } else {
+      const rate = totalConsumedL / totalHrs;
+      const mean = rates.reduce((a,b) => a+b, 0) / rates.length;
+      const variance = rates.reduce((a,b) => a + (b-mean)**2, 0) / rates.length;
+      const cv = mean > 0 ? Math.sqrt(variance) / mean : 1;
+      const confidence = cv < 0.35 ? 'high' : cv < 0.7 ? 'medium' : 'low';
+      result = { rate: +rate.toFixed(2), confidence, samples: rates.length };
+    }
+
+    _burnCache = { result, ts: Date.now() };
+    return result;
+  }
+
+  async function computePrediction() {
+    const currentPct = (typeof dayStore !== 'undefined' && dayStore.fuelPct?.length)
+      ? dayStore.fuelPct[dayStore.fuelPct.length - 1] : null;
+    if (currentPct === null) return null;
+
+    const currentL = Math.round(currentPct * TANK_CAPACITY / 100);
+    const { rate, confidence, samples } = await computeRollingBurn(6);
+
+    if (rate <= 0) {
+      return { currentL, currentPct, rate: 0, confidence: 'low', samples, hoursToLow: null, etaDate: null };
+    }
+
+    const lowL = LOW_FUEL_PCT * TANK_CAPACITY / 100;
+    const litresUntilLow = Math.max(0, currentL - lowL);
+    const hoursToLow = litresUntilLow / rate;
+    const etaDate = new Date(Date.now() + hoursToLow * 3600 * 1000);
+
+    return { currentL, currentPct, rate, confidence, samples, hoursToLow, etaDate };
+  }
+
+  function confidenceBadge(level) {
+    const map = {
+      high:   { color: '#059669', bg: '#ECFDF5', label: '● High confidence' },
+      medium: { color: '#D97706', bg: '#FEF3C7', label: '◐ Medium confidence' },
+      low:    { color: '#8A9BB5', bg: '#F1F5F9', label: '○ Low confidence — need more data' }
+    };
+    const c = map[level] || map.low;
+    return `<span style="font-size:.62rem;font-weight:800;color:${c.color};background:${c.bg};padding:2px 8px;border-radius:20px;white-space:nowrap">${c.label}</span>`;
+  }
+
+  function fmtEta(etaDate, hoursToLow) {
+    if (!etaDate) return { big: '—', sub: 'Not enough data yet' };
+    const now = new Date();
+    const sameDay = etaDate.toDateString() === now.toDateString();
+    const tomorrow = new Date(now); tomorrow.setDate(now.getDate() + 1);
+    const isTomorrow = etaDate.toDateString() === tomorrow.toDateString();
+    const timeStr = etaDate.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+    const dayStr = sameDay ? 'Today' : isTomorrow ? 'Tomorrow' : etaDate.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+    const hrsRound = Math.round(hoursToLow);
+    return { big: `${dayStr}, ${timeStr}`, sub: `≈ ${hrsRound} hour${hrsRound !== 1 ? 's' : ''} from now` };
+  }
+
+  // Tiny inline sparkline (last ~40 pct readings) — no chart lib needed
+  function buildSparkline(values, w = 240, h = 40, color = '#059669') {
+    if (!values || values.length < 2) return `<svg width="${w}" height="${h}"></svg>`;
+    const min = Math.min(...values), max = Math.max(...values);
+    const range = (max - min) || 1;
+    const step = w / (values.length - 1);
+    const pts = values.map((v, i) => `${(i*step).toFixed(1)},${(h - ((v-min)/range)*h).toFixed(1)}`).join(' ');
+    return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+      <polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>`;
+  }
+
+  // ── Detail panel (expands in place under the card) ─────────────
+  let detailOpen = false;
+
+  function toggleRefillDetail() {
+    const card = document.getElementById('refillTrackerCard');
+    if (!card) return;
+    let panel = document.getElementById('refillDetailPanel');
+    if (detailOpen) {
+      if (panel) panel.remove();
+      detailOpen = false;
+      const chev = document.getElementById('rtcChevron');
+      if (chev) chev.textContent = '▾';
+      return;
+    }
+    panel = document.createElement('div');
+    panel.id = 'refillDetailPanel';
+    panel.innerHTML = `<div class="rtc-detail"><div class="rtc-empty">Calculating prediction…</div></div>`;
+    card.appendChild(panel);
+    detailOpen = true;
+    const chev = document.getElementById('rtcChevron');
+    if (chev) chev.textContent = '▴';
+
+    buildRefillDetailHTML().then(html => {
+      const p = document.getElementById('refillDetailPanel');
+      if (p) p.innerHTML = html;
+    });
+  }
+
+  async function buildRefillDetailHTML() {
+    const pred = await computePrediction();
+    const spark = (typeof dayStore !== 'undefined' && dayStore.fuelPct)
+      ? dayStore.fuelPct.slice(-40) : [];
+
+    if (!pred) {
+      return `<div class="rtc-detail"><div class="rtc-empty">No live fuel data yet.</div></div>`;
+    }
+
+    const eta = fmtEta(pred.etaDate, pred.hoursToLow);
+    const levelColor = pred.currentPct > 50 ? '#059669' : pred.currentPct > 25 ? '#D97706' : '#DC2626';
+
+    // Per-refill interval stats (days between refills)
+    const sorted = [...refillRecords].sort((a,b) => new Date(a.time) - new Date(b.time));
+    let avgIntervalDays = null;
+    if (sorted.length >= 2) {
+      const spans = [];
+      for (let i = 1; i < sorted.length; i++) {
+        spans.push((new Date(sorted[i].time) - new Date(sorted[i-1].time)) / 86400000);
+      }
+      avgIntervalDays = (spans.reduce((a,b)=>a+b,0) / spans.length).toFixed(1);
+    }
+
+    return `
+      <div class="rtc-detail">
+
+        <div class="rtc-detail-grid">
+
+          <!-- Prediction card -->
+          <div class="rtc-pred-card">
+            <div class="rtc-pred-head">
+              <span class="rtc-pred-icon">🔮</span>
+              <span class="rtc-pred-title">Next Refill Predicted</span>
+              ${confidenceBadge(pred.confidence)}
+            </div>
+            <div class="rtc-pred-eta">${eta.big}</div>
+            <div class="rtc-pred-sub">${eta.sub}</div>
+            <div class="rtc-pred-meta">
+              Based on rolling burn rate over last 6h${pred.samples ? ` (${pred.samples} samples)` : ''}.
+              Triggers when tank reaches ${LOW_FUEL_PCT}%.
+            </div>
+          </div>
+
+          <!-- Burn rate + level -->
+          <div class="rtc-mini-stats">
+            <div class="rtc-mini">
+              <div class="rtc-mini-lbl">🔥 Rolling Burn Rate</div>
+              <div class="rtc-mini-val">${pred.rate > 0 ? pred.rate.toFixed(1) : '—'} <span>L/hr</span></div>
+            </div>
+            <div class="rtc-mini">
+              <div class="rtc-mini-lbl">⛽ Current Level</div>
+              <div class="rtc-mini-val" style="color:${levelColor}">${pred.currentPct}% <span>${pred.currentL} L</span></div>
+            </div>
+            <div class="rtc-mini">
+              <div class="rtc-mini-lbl">📅 Avg Days Between Refills</div>
+              <div class="rtc-mini-val">${avgIntervalDays ?? '—'} <span>${avgIntervalDays ? 'days' : ''}</span></div>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Sparkline -->
+        <div class="rtc-spark-wrap">
+          <div class="rtc-spark-lbl">📉 Fuel level trend (recent readings)</div>
+          ${buildSparkline(spark, 600, 46, levelColor)}
+        </div>
+
+      </div>`;
   }
 
   // ── Init ──────────────────────────────────────────────────────

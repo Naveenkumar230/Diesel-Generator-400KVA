@@ -41,9 +41,10 @@ async function connectMongo() {
       connectTimeoutMS: 10000,
     });
     db = client.db(MONGO_DB);
-    console.log('[MongoDB] Connected ✓  db =', MONGO_DB);
-    loadRefillCache();
-    loadGensetSettings();  // ← called too early, db is null here
+console.log('[MongoDB] Connected ✓  db =', MONGO_DB);
+loadRefillCache();
+loadGensetSettings();
+loadRuntimeState();   
   } catch (e) {
     console.error('[MongoDB] Connection failed:', e.message);
     console.log('[MongoDB] Retrying in 15s...');
@@ -114,12 +115,11 @@ mqttClient.on('message', (topic, message) => {
     const ac  = payload.ac     || {};
     const eng = payload.engine || {};
     console.log(
-        `[MQTT] [${payload.serverTime.substring(11,19)}] ` +
+`[MQTT] [${new Date().toLocaleTimeString('en-IN', { hour12: false, timeZone: 'Asia/Kolkata' })}] ` +
         `State="${payload.stateLabel}" | RPM=${parseFloat(eng.rpm||0).toFixed(0)} | ` +
         `kW=${ac.kwTotal} | Freq=${ac.freq}Hz | Clients=${io.engine.clientsCount}`
     );
 });
-
 
 let gensetSettings = {
   refillThresholdL:      30,
@@ -205,6 +205,63 @@ let refillTracker = {
   prevFuelL:    null,   // last known fuel litres
   prevFuelPct:  null,   // last known fuel %
 };
+
+// ── Server-side "today" trackers — run 24/7, independent of browser ──
+let engineHoursToday = { dateKey: null, seconds: 0, lastTs: null };
+let fuelSession      = { dateKey: null, startL: null, startPct: null };
+let _runtimeLastSaveMs = 0;
+
+async function loadRuntimeState() {
+  if (!db) return;
+  try {
+    const doc = await db.collection('runtime').findOne({ _id: 'today' });
+    const dk = todayKey();
+    if (doc && doc.dateKey === dk) {
+      engineHoursToday = { dateKey: doc.dateKey, seconds: doc.engineSeconds || 0, lastTs: null };
+      fuelSession      = { dateKey: doc.dateKey, startL: doc.fuelStartL, startPct: doc.fuelStartPct };
+      console.log(`[Runtime] Restored today's state: ${(engineHoursToday.seconds/3600).toFixed(2)}h, fuel start ${fuelSession.startL}L`);
+    }
+  } catch (e) { console.error('[Runtime] load error:', e.message); }
+}
+
+async function saveRuntimeState() {
+  if (!db) return;
+  try {
+    await db.collection('runtime').updateOne(
+      { _id: 'today' },
+      { $set: {
+          dateKey: engineHoursToday.dateKey,
+          engineSeconds: engineHoursToday.seconds,
+          fuelStartL: fuelSession.startL,
+          fuelStartPct: fuelSession.startPct
+        } },
+      { upsert: true }
+    );
+  } catch (e) { console.error('[Runtime] save error:', e.message); }
+}
+
+function updateEngineHoursTodayServer(isRunning) {
+  const nowKey = todayKey();
+  if (engineHoursToday.dateKey !== nowKey) {
+    engineHoursToday = { dateKey: nowKey, seconds: 0, lastTs: null };
+  }
+  const now = Date.now();
+  if (engineHoursToday.lastTs !== null) {
+    const deltaSec = (now - engineHoursToday.lastTs) / 1000;
+    if (isRunning && deltaSec > 0 && deltaSec < 120) {
+      engineHoursToday.seconds += deltaSec;
+    }
+  }
+  engineHoursToday.lastTs = now;
+  return engineHoursToday.seconds / 3600;
+}
+
+function updateFuelSessionServer(fuelL, fuelPct) {
+  const nowKey = todayKey();
+  if (fuelSession.dateKey !== nowKey || fuelSession.startL == null) {
+    fuelSession = { dateKey: nowKey, startL: fuelL, startPct: fuelPct };
+  }
+}
 
 // In-memory cache of recent refills (also persisted to MongoDB)
 let refillCache = [];   // [{_id, time, beforeL, afterL, addedL, beforePct, afterPct, person, auto}]
@@ -838,13 +895,14 @@ app.get('/api/health', (req, res) => {
 
 app.get('/api/derived', (req, res) => {
   res.json({
-    lastTransferSec: amfStateTracker.lastTransferMs
-      ? +(amfStateTracker.lastTransferMs / 1000).toFixed(1) : null,
-    lastCrankSec: crankTracker.lastCrankMs
-      ? +(crankTracker.lastCrankMs / 1000).toFixed(1) : null,
+    lastTransferSec , 
+    lastCrankSec , 
     transferLog: amfStateTracker.transferLog,
-    crankLog:    crankTracker.crankLog,
-    gensetInfo
+    crankLog: crankTracker.crankLog,
+    gensetInfo,
+    engineHoursToday: engineHoursToday.seconds / 3600,   // ← add
+    fuelSessionStartL: fuelSession.startL,                 // ← add
+    fuelSessionStartPct: fuelSession.startPct              // ← add
   });
 });
 

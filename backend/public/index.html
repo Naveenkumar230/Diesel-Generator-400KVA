@@ -295,16 +295,6 @@
     <span class="ib-lbl">🔌 Curr Unbalance</span>
     <span class="ib-val ib-badge" id="currUnbalBadge">—</span>
   </span>
-  <span class="ib-sep"></span>
-  <span class="ib-item">
-    <span class="ib-lbl">🔀 Last Transfer</span>
-    <span class="ib-val ib-badge" id="lastTransferBadge">—</span>
-  </span>
-  <span class="ib-sep"></span>
-  <span class="ib-item">
-    <span class="ib-lbl">🚀 Last Crank</span>
-    <span class="ib-val ib-badge" id="lastCrankBadge">—</span>
-  </span>
 </div>
 
 <!-- WARNING STRIP — shows live warnings from PS0600 registers -->
@@ -679,7 +669,7 @@
 <section class="section" onclick="gsDetail.open('fuel')" style="cursor:pointer">
   <div class="sec-head">
     <span class="sec-tag fuel-tag">⛽ FUEL</span>
-    <span class="sec-title">Fuel System — Tank: 780 Litres</span>
+    <span class="sec-title">Fuel System — Tank: 785 Litres</span>
     <span class="sec-hint">📂 Click section to drill down</span>
   </div>
 
@@ -740,15 +730,6 @@
 
   <div class="fss-sep"></div>
 
-  <!-- ── DAY-1 CUMULATIVE ─────────────────── -->
-  <div class="fss-cell">
-    <div class="fss-icon">📅</div>
-    <div class="fss-body">
-      <div class="fss-label">Total Since Day 1</div>
-      <div class="fss-value mono amber" id="day1ConsumedL">— L</div>
-      <div class="fss-sub" id="day1StartDate">From first PLC reading</div>
-    </div>
-  </div>
 
   <div class="fss-cell">
     <div class="fss-icon">🕐</div>
@@ -770,11 +751,11 @@
      ════════════════════════════════════════════════════════════ -->
 
 <div class="card fuel-tank-card" onclick="event.stopPropagation()">
-  <div class="card-label">⛽ Tank Level — 780 L Total Capacity</div>
+  <div class="card-label">⛽ Tank Level — 785 L Total Capacity</div>
 
   <!-- Explain box -->
   <div class="fuel-explain-box">
-    💡 <strong>Tank level:</strong> Diesel remaining in the 780L tank right now, measured by sensor.
+    💡 <strong>Tank level:</strong> Diesel remaining in the 785L tank right now, measured by sensor.
   </div>
 
   <!-- Main viz row: [tank + ticks] + [stat cards] -->
@@ -793,9 +774,9 @@
       <!-- Ticks column — same height as cylinder (155px set by CSS) -->
       <!-- bottom% = fill level that marker points to -->
       <div class="tank-3d-markers">
-        <div class="tank-marker"        style="bottom:97%"><span>100%</span><span>780L</span></div>
-        <div class="tank-marker warn"   style="bottom:48%"><span>50%</span><span>390L</span></div>
-        <div class="tank-marker danger" style="bottom:23%"><span>25% ⚠</span><span>195L</span></div>
+        <div class="tank-marker"        style="bottom:97%"><span>100%</span><span>785L</span></div>
+<div class="tank-marker warn"   style="bottom:48%"><span>50%</span><span>393L</span></div>
+<div class="tank-marker danger" style="bottom:23%"><span>25% ⚠</span><span>196L</span></div>
         <div class="tank-marker"        style="bottom:1%" ><span>0%</span><span>Empty</span></div>
       </div>
 
@@ -838,7 +819,7 @@
       <div class="tlb-fill" id="tankLevelBar" style="width:0%"></div>
     </div>
     <div style="text-align:right;margin-top:3px;font-size:.58rem;color:#4A5568;font-family:'JetBrains Mono',monospace">
-      Total capacity: 780 L
+      Total capacity: 785 L
     </div>
   </div>
 

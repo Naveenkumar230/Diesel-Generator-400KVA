@@ -148,9 +148,7 @@ initGauge('gTemp', {
 // ════════════════════════════════════════════════════════════════
 //  24-HOUR DATA STORE
 // ════════════════════════════════════════════════════════════════
-const TANK_CAPACITY = 780;
-
-
+const TANK_CAPACITY = 785;
 
 // ════════════════════════════════════════════════════════════════
 //  TODAY'S ENGINE RUNTIME TRACKER (resets at local midnight IST)
@@ -160,9 +158,10 @@ function _todayKeyIST() {
 }
 
 // ── Fetch the real start-of-day fuel level from server history ────
-window._fuelDayKey        = null;
-window._fuelSessionStart  = null;
-window._fuelSessionStartPct = null;
+const _cachedFuelSession = _loadFuelSessionToday();
+window._fuelDayKey          = _cachedFuelSession ? _todayKeyIST() : null;
+window._fuelSessionStart    = _cachedFuelSession ? _cachedFuelSession.litres : null;
+window._fuelSessionStartPct = _cachedFuelSession ? _cachedFuelSession.pct    : null;
 window._fuelSessionFetching = false;
 
 async function fetchTodayStartFuel() {
@@ -179,6 +178,7 @@ async function fetchTodayStartFuel() {
       window._fuelSessionStart    = litresArr[firstIdx];
       window._fuelSessionStartPct = pctArr[firstIdx] || 0;
       window._fuelDayKey          = todayKey;
+      _saveFuelSessionToday(todayKey, window._fuelSessionStart, window._fuelSessionStartPct);
     }
   } catch (e) {
     console.warn('[Fuel] Could not fetch today start fuel:', e.message);
@@ -202,6 +202,31 @@ function _loadEngHoursToday() {
     console.warn('[EngHours] Could not read localStorage:', e.message);
   }
   return null;
+}
+
+const FUEL_SESSION_STORAGE_KEY = 'gensight_fuelSessionToday';
+
+function _loadFuelSessionToday() {
+  try {
+    const raw = localStorage.getItem(FUEL_SESSION_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && parsed.dateKey === _todayKeyIST()
+        && typeof parsed.litres === 'number' && typeof parsed.pct === 'number') {
+      return parsed;
+    }
+  } catch (e) {
+    console.warn('[Fuel] Could not read session cache:', e.message);
+  }
+  return null;
+}
+
+function _saveFuelSessionToday(dateKey, litres, pct) {
+  try {
+    localStorage.setItem(FUEL_SESSION_STORAGE_KEY, JSON.stringify({ dateKey, litres, pct }));
+  } catch (e) {
+    console.warn('[Fuel] Could not write session cache:', e.message);
+  }
 }
 
 function _saveEngHoursToday(dateKey, seconds) {
@@ -382,7 +407,7 @@ const fuelChart = new Chart(fuelCtx, {
   data: {
     labels: [],
     datasets: [
-      { label: 'Fuel % (780L tank)',  data: [], borderColor: '#059669', borderWidth: 2, tension: .4, pointRadius: 0, fill: true,  backgroundColor: 'rgba(5,150,105,.08)', yAxisID: 'yL' },
+      { label: 'Fuel % (785L tank)',  data: [], borderColor: '#059669', borderWidth: 2, tension: .4, pointRadius: 0, fill: true,  backgroundColor: 'rgba(5,150,105,.08)', yAxisID: 'yL' },
       { label: 'Litres remaining',    data: [], borderColor: '#2563EB', borderWidth: 1.5, tension: .4, pointRadius: 0, fill: false, yAxisID: 'yR' }
     ]
   },
@@ -804,7 +829,8 @@ function renderInfoBar(derived) {
       xferBadge.textContent = sec.toFixed(1) + 's';
       xferBadge.className = 'ib-val ib-badge ' + (pass ? 'pass' : 'fail');
       xferBadge.title = pass ? 'NFPA 110 ✅ passed' : '⚠️ Exceeds 10s NFPA110 limit';
-    } else { xferBadge.textContent = 'No event'; xferBadge.className = 'ib-val ib-badge'; }
+    // } else { xferBadge.textContent = ''; xferBadge.className = 'ib-val ib-badge'; }
+    }
   }
   const crankBadge = $('lastCrankBadge');
   if (crankBadge) {
@@ -813,7 +839,8 @@ function renderInfoBar(derived) {
       crankBadge.textContent = sec.toFixed(1) + 's';
       crankBadge.className = 'ib-val ib-badge ' + (sec > 15 ? 'warn' : 'ok');
       crankBadge.title = sec > 15 ? '⚠️ Hard start (>15s)' : '✅ Normal crank';
-    } else { crankBadge.textContent = 'No event'; crankBadge.className = 'ib-val ib-badge'; }
+    // } else { crankBadge.textContent = ''; crankBadge.className = 'ib-val ib-badge'; }
+    }
   }
 }
 
@@ -1151,10 +1178,15 @@ const burnForRuntime = actualBurnRate > 0 ? actualBurnRate : expectedBurn;
 const hoursLeft = burnForRuntime > 0 ? fLitres / burnForRuntime : 0;
 const engHours = parseFloat(eng.hours) || 0; // lifetime meter — kept for other fields, do not remove
 
-// ── Today-only runtime (resets at local midnight) ──────────────
-const rpm_forToday = parseFloat(eng.rpm) || 0;
-const isRunningNow = rpm_forToday > 100 || kw_fuel > 1;
+
+const acOutputPresent = vL1 > 5 || vL2 > 5 || vL3 > 5 || kw_fuel > 0.5;
+const isRunningNow = acOutputPresent;
 const engHoursToday = updateEngineHoursToday(isRunningNow);
+
+// Push to the "Engine Hours Today" card
+const engHrsWhole = Math.floor(engHoursToday);
+const engMinsPart = Math.round((engHoursToday - engHrsWhole) * 60);
+setText('fuelEngHours', `${engHrsWhole}h ${engMinsPart}m`);
 
 // ── Session Strip ──────────────────────────────────────────────
 setText('fuelSessionStart',    sessionReady ? sessionStartL + ' L' : '— (loading baseline)');
@@ -1507,7 +1539,7 @@ if (socket) {
       ]
     },
    fuel: {
-      icon: '⛽', title: 'Fuel System — Tank: 780 L',
+      icon: '⛽', title: 'Fuel System — Tank: 785 L',
       statsKeys: [
         { key: 'fuelLevelPct',  label: 'Tank Level',          unit: '%',   dec: 0 },
         { key: 'fuelLevelL',    label: 'Volume (Litres)',      unit: 'L',   dec: 0 },
@@ -1527,7 +1559,7 @@ if (socket) {
         {
           id: 'fuel_level_pct',
           trendId: 'level',
-          title: 'Tank Level % — How full is the 780L tank over time',
+          title: 'Tank Level % — How full is the 785L tank over time',
           tall: false, fill: true,
           datasets: [{ label: 'Fuel Level (%)', key: 'fuelLevelPct', color: '#059669', fill: true }]
         },
@@ -1649,7 +1681,7 @@ if (socket) {
 }
 
 function buildStatsHTML(section, data) {
-  const TANK = 780;
+  const TANK = 785;
 
   // ════════════════════════════════════════════════════════════════
 //  REPLACE the entire fuel block inside buildStatsHTML()
@@ -1659,7 +1691,7 @@ function buildStatsHTML(section, data) {
 // ════════════════════════════════════════════════════════════════
 
   if (currentSection === 'fuel') {
-    const TANK = 780;
+    const TANK = 785;
 
     const pctArr      = data.fuelLevelPct   || [];
     const litresArr   = data.fuelLevelL     || [];
@@ -1798,7 +1830,7 @@ const haveStableStart = !currentIsRange
 
       <!-- ── EXPLAIN BANNER ──────────────────────────────── -->
       <div style="background:rgba(37,99,235,.05);border:1.5px solid rgba(37,99,235,.2);border-radius:12px;padding:12px 16px;font-size:12px;color:#1A2340;line-height:1.7">
-        💡 <strong>How to read this page:</strong> The fuel system tracks how much diesel is in the 780L tank, how fast the DG is consuming it (burn rate), and how long you can run before refueling is needed. All values update live from Modbus sensors.
+        💡 <strong>How to read this page:</strong> The fuel system tracks how much diesel is in the 785L tank, how fast the DG is consuming it (burn rate), and how long you can run before refueling is needed. All values update live from Modbus sensors.
       </div>
 
       <!-- ── ROW 1: KEY STATS (6 cards) ──────────────────── -->
@@ -1820,7 +1852,7 @@ const haveStableStart = !currentIsRange
 
         <!-- Tank Visual Card -->
         <div style="background:#fff;border:1.5px solid #E2E8F5;border-radius:14px;padding:18px">
-          <div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.09em;color:#8A9BB5;margin-bottom:12px">⛽ Tank Level — 780 L Capacity</div>
+          <div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.09em;color:#8A9BB5;margin-bottom:12px">⛽ Tank Level — 785 L Capacity</div>
 
           <!-- Big % display -->
           <div style="display:flex;align-items:center;gap:16px;margin-bottom:14px">
@@ -2033,12 +2065,15 @@ function alignSeriesToDayGrid(gridLabels, rawTimestamps, rawValues, intervalSec 
     let getSeries = (key) => data[key] || [];
 
     if (!isRange) {
-      // Single-day view → force a full 00:00:00–23:59:xx axis
-      const gridLabels = buildDayGridLabels();
-      labels = gridLabels;
-      getSeries = (key) => alignSeriesToDayGrid(gridLabels, data.timestamps, data[key]);
+      // Single-day view → force a full 00:00:00–23:59:xx axis, downsampled
+      // so we're not asking Chart.js to draw tens of thousands of points.
+      const rawGridLabels = buildDayGridLabels(); // e.g. 720 pts at 2-min resolution
+      labels = downsample(rawGridLabels, 400);
+      getSeries = (key) => {
+        const aligned = alignSeriesToDayGrid(rawGridLabels, data.timestamps, data[key]);
+        return downsample(aligned, 400);
+      };
     }
-
     section.charts.forEach(ch => {
       const canvas = document.getElementById(ch.id);
       if (!canvas) return;
@@ -2061,7 +2096,7 @@ function alignSeriesToDayGrid(gridLabels, rawTimestamps, rawValues, intervalSec 
         type: useBar ? 'bar' : 'line',
         data: { labels, datasets },
         options: {
-          responsive: true, maintainAspectRatio: false, animation: { duration: 300 },
+responsive: true, maintainAspectRatio: false, animation: { duration: 0 },
           interaction: { mode: 'index', intersect: false },
           plugins: {
             legend: { position: 'bottom', labels: { font: { family: 'JetBrains Mono', size: 10 }, boxWidth: 10, padding: 12, color: '#4A5568' } },
@@ -2123,6 +2158,7 @@ function alignSeriesToDayGrid(gridLabels, rawTimestamps, rawValues, intervalSec 
   }
 
 async function loadDetailData(from, to) {
+    const requestedSection = currentSection;   // snapshot — guards against races
     const body = document.getElementById('gsdBody');
     const isRange = from !== to;
     body.innerHTML = `<div class="gsd-loading"><div class="gsd-spinner"></div><span>Fetching data for ${from}${isRange ? ' → ' + to : ''}…</span></div>`;
@@ -2130,23 +2166,28 @@ async function loadDetailData(from, to) {
 
     let data;
     try {
-      const r = await fetch(`/api/history?from=${from}&to=${to}`);
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const json = await r.json();
+      const json = await fetchHistoryCached(from, to);
+
+      // If the overlay was closed or switched sections while this was in flight,
+      // drop the response — rendering it now would crash (stale section) or
+      // show the wrong section's data.
+      if (currentSection !== requestedSection) return;
 
       if (!json.timestamps || json.timestamps.length === 0 || json.noData) {
-        data = seedFromDayStore(currentSection);
+        data = seedFromDayStore(requestedSection);
       } else {
         data = isRange ? compressToDailyAverages(json, from, to) : json;
       }
     } catch(e) {
       console.error('[Detail] Fetch error:', e.message);
-      data = seedFromDayStore(currentSection);
+      if (currentSection !== requestedSection) return;
+      data = seedFromDayStore(requestedSection);
     }
 
+    if (currentSection !== requestedSection) return; // final guard
     currentData    = data;
     currentIsRange = isRange;
-    renderDetailBody(SECTIONS[currentSection], data, isRange);
+    renderDetailBody(SECTIONS[requestedSection], data, isRange);
 }
 
 
@@ -2296,7 +2337,7 @@ function todayStr()    { return new Date().toLocaleDateString('en-CA', { timeZon
       crankPressPsi: parseFloat(eng.crankPressPsi) || 0, fuelSupplyPsi: parseFloat(eng.fuelPressPsi) || 0,
       coolantPsi: parseFloat(eng.coolantPsi) || 0, torquePct: parseFloat(eng.torquePct) || 0,
       battV: parseFloat(elec.battV) || 0,
-      fuelLevelPct: parseFloat(fuel.pct) || 0, fuelLevelL: Math.round((parseFloat(fuel.pct) || 0) * 780 / 100),
+      fuelLevelPct: parseFloat(fuel.pct) || 0, fuelLevelL: Math.round((parseFloat(fuel.pct) || 0) * 785 / 100),
       utilVoltL1N: parseFloat(util.voltL1N) || 0, utilVoltL2N: parseFloat(util.voltL2N) || 0, utilVoltL3N: parseFloat(util.voltL3N) || 0,
       utilVoltL1L2: parseFloat(util.voltL1L2) || 0, utilVoltL2L3: parseFloat(util.voltL2L3) || 0, utilVoltL3L1: parseFloat(util.voltL3L1) || 0,
       utilFrequency: parseFloat(util.freq) || 0,
@@ -2334,6 +2375,31 @@ function todayStr()    { return new Date().toLocaleDateString('en-CA', { timeZon
   const _savedSection = sessionStorage.getItem('gsDetailOpen');
   if (_savedSection && SECTIONS[_savedSection]) {
     openDetail(_savedSection);
+  }
+
+  // ── Response cache — avoid re-fetching the same date range repeatedly ──
+  const _historyCache = new Map(); // key: "from|to" -> { json, ts }
+  const CACHE_TTL_MS = 60000; // 1 minute — live data still needs refreshing eventually
+
+  async function fetchHistoryCached(from, to) {
+    const key = `${from}|${to}`;
+    const cached = _historyCache.get(key);
+    if (cached && (Date.now() - cached.ts) < CACHE_TTL_MS) {
+      return cached.json;
+    }
+    const r = await fetch(`/api/history?from=${from}&to=${to}`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const json = await r.json();
+    _historyCache.set(key, { json, ts: Date.now() });
+    return json;
+  }
+
+  function downsample(arr, maxPoints = 400) {
+    if (!arr || arr.length <= maxPoints) return arr;
+    const stride = Math.ceil(arr.length / maxPoints);
+    const out = [];
+    for (let i = 0; i < arr.length; i += stride) out.push(arr[i]);
+    return out;
   }
 
 // ── Expose globally ────────────────────────────────────────
