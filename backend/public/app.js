@@ -157,34 +157,44 @@ function _todayKeyIST() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 }
 
-// ── Fetch the real start-of-day fuel level from server history ────
-const _cachedFuelSession = _loadFuelSessionToday();
-window._fuelDayKey          = _cachedFuelSession ? _todayKeyIST() : null;
-window._fuelSessionStart    = _cachedFuelSession ? _cachedFuelSession.litres : null;
-window._fuelSessionStartPct = _cachedFuelSession ? _cachedFuelSession.pct    : null;
-window._fuelSessionFetching = false;
 
 async function fetchTodayStartFuel() {
   if (window._fuelSessionFetching) return;
   window._fuelSessionFetching = true;
   const todayKey = _todayKeyIST();
+  const t0 = performance.now();
   try {
-    const r = await fetch(`/api/history?from=${todayKey}&to=${todayKey}`);
+    const r = await fetch(`/api/fuel/session-start?date=${todayKey}`);
     const json = await r.json();
-    const litresArr = json.fuelLevelL || [];
-    const pctArr    = json.fuelLevelPct || [];
-    const firstIdx  = litresArr.findIndex(v => typeof v === 'number' && v > 0);
-    if (firstIdx !== -1) {
-      window._fuelSessionStart    = litresArr[firstIdx];
-      window._fuelSessionStartPct = pctArr[firstIdx] || 0;
+    console.log(`[Fuel] session-start took ${(performance.now()-t0).toFixed(0)}ms`);
+    if (json.litres != null) {
+      window._fuelSessionStart    = json.litres;
+      window._fuelSessionStartPct = json.pct || 0;
       window._fuelDayKey          = todayKey;
       _saveFuelSessionToday(todayKey, window._fuelSessionStart, window._fuelSessionStartPct);
+
+      // Update the DOM immediately — don't wait for the next socket render tick.
+      setText('fuelSessionStart',    window._fuelSessionStart    + ' L');
+      setText('fuelSessionStartPct', window._fuelSessionStartPct + '%');
     }
   } catch (e) {
     console.warn('[Fuel] Could not fetch today start fuel:', e.message);
   } finally {
     window._fuelSessionFetching = false;
   }
+}
+
+const _cachedFuelSession = _loadFuelSessionToday();
+window._fuelDayKey          = _cachedFuelSession ? _todayKeyIST() : null;
+window._fuelSessionStart    = _cachedFuelSession ? _cachedFuelSession.litres : null;
+window._fuelSessionStartPct = _cachedFuelSession ? _cachedFuelSession.pct    : null;
+window._fuelSessionFetching = false;
+
+// Kick this off immediately on page load — don't wait for the first socket
+// message. This is what was causing "— (loading baseline)" to sit unfilled
+// for several seconds after opening the page.
+if (window._fuelDayKey !== _todayKeyIST()) {
+  fetchTodayStartFuel();
 }
 
 const ENG_HOURS_STORAGE_KEY = 'gensight_engHoursToday';
@@ -922,7 +932,7 @@ function renderNewFeatures(latest, derived) {
 // ════════════════════════════════════════════════════════════════
 let lastState = null, lastFaultCode = 0;
 
-function render(latest, history) {
+function render(latest, history , derived) {
   if (!latest) return;
   pushDayStore(latest);
 
@@ -1181,9 +1191,12 @@ const engHours = parseFloat(eng.hours) || 0; // lifetime meter — kept for othe
 
 const acOutputPresent = vL1 > 5 || vL2 > 5 || vL3 > 5 || kw_fuel > 0.5;
 const isRunningNow = acOutputPresent;
-const engHoursToday = updateEngineHoursToday(isRunningNow);
+// Use the server's accurate value (lifetime meter delta) when available,
+// fall back to the client heuristic only if the server hasn't sent it yet.
+const engHoursToday = (derived && typeof derived.engineHoursToday === 'number')
+  ? derived.engineHoursToday
+  : updateEngineHoursToday(isRunningNow);
 
-// Push to the "Engine Hours Today" card
 const engHrsWhole = Math.floor(engHoursToday);
 const engMinsPart = Math.round((engHoursToday - engHrsWhole) * 60);
 setText('fuelEngHours', `${engHrsWhole}h ${engMinsPart}m`);
@@ -1367,7 +1380,7 @@ if (socket) {
   });
   socket.on('genset:update', ({ latest, history, derived }) => {
     try {
-      render(latest, history);
+      render(latest, history, derived);
       renderNewFeatures(latest, derived);
     } catch(e) { console.error('[render]', e); }
   });
@@ -1682,6 +1695,24 @@ if (socket) {
 
 function buildStatsHTML(section, data) {
   const TANK = 785;
+
+  // ── RANGE MODE (multi-day) — generic Min/Max/Avg/Current cards for every section ──
+  if (data.isRange) {
+    return section.statsKeys.map(sk => {
+      const s = (data.overall && data.overall[sk.key]) || { min: 0, max: 0, avg: 0, last: 0 };
+      const fmt = n => parseFloat(n).toFixed(sk.dec);
+      return `
+        <div class="gsd-stat-card">
+          <div class="gsd-stat-param">${sk.label}${sk.unit ? ' (' + sk.unit + ')' : ''}</div>
+          <div class="gsd-stat-grid">
+            <span class="gsd-sv">Current</span><span class="gsd-sn cur">${fmt(s.last)}</span>
+            <span class="gsd-sv">Max</span>    <span class="gsd-sn">${fmt(s.max)}</span>
+            <span class="gsd-sv">Min</span>    <span class="gsd-sn">${fmt(s.min)}</span>
+            <span class="gsd-sv">Avg</span>    <span class="gsd-sn">${fmt(s.avg)}</span>
+          </div>
+        </div>`;
+    }).join('');
+  }
 
   // ════════════════════════════════════════════════════════════════
 //  REPLACE the entire fuel block inside buildStatsHTML()
@@ -1999,15 +2030,20 @@ const haveStableStart = !currentIsRange
   }
 
   // ── Default for all other sections ────────────────────────
-  return section.statsKeys.map(sk => {
-    const arr   = data[sk.key] || [];
-    const valid = arr.filter(x => typeof x === 'number' && !isNaN(x) && x !== 0);
-    const fmt   = n => parseFloat(n).toFixed(sk.dec);
-    const s     = valid.length
-      ? { min: Math.min(...valid), max: Math.max(...valid),
-          avg: valid.reduce((a, b) => a + b, 0) / valid.length,
-          last: valid[valid.length - 1] }
-      : { min: 0, max: 0, avg: 0, last: 0 };
+  // ── Default for all other sections ────────────────────────
+return section.statsKeys.map(sk => {
+    let s;
+    if (data.isRange) {
+      s = data.overall[sk.key] || { min: 0, max: 0, avg: 0, last: 0 };
+    } else {
+      const arr   = data[sk.key] || [];
+      const valid = arr.filter(x => typeof x === 'number' && !isNaN(x) && x !== 0);
+      s = valid.length
+        ? { min: Math.min(...valid), max: Math.max(...valid),
+            avg: valid.reduce((a,b)=>a+b,0)/valid.length, last: valid[valid.length-1] }
+        : { min: 0, max: 0, avg: 0, last: 0 };
+    }
+    const fmt = n => parseFloat(n).toFixed(sk.dec);
     return `
       <div class="gsd-stat-card">
         <div class="gsd-stat-param">${sk.label}${sk.unit ? ' (' + sk.unit + ')' : ''}</div>
@@ -2045,6 +2081,17 @@ function buildDayGridLabels(intervalSec = DAY_GRID_INTERVAL_SEC) {
   return labels;
 }
 
+function alignBucketedToGrid(gridLabels, bucketLabels, bucketValues) {
+  const map = {};
+  (bucketLabels || []).forEach((lbl, i) => {
+    map[String(lbl).slice(0, 5)] = bucketValues ? bucketValues[i] : null;
+  });
+  return gridLabels.map(g => {
+    const key = g.slice(0, 5);
+    return (key in map) ? map[key] : null;
+  });
+}
+
 function alignSeriesToDayGrid(gridLabels, rawTimestamps, rawValues, intervalSec = DAY_GRID_INTERVAL_SEC) {
   const sums   = new Array(gridLabels.length).fill(0);
   const counts = new Array(gridLabels.length).fill(0);
@@ -2060,43 +2107,50 @@ function alignSeriesToDayGrid(gridLabels, rawTimestamps, rawValues, intervalSec 
 }
 
 
- function renderDetailCharts(section, data, isRange) {
-    let labels = data.timestamps || [];
-    let getSeries = (key) => data[key] || [];
+function renderDetailCharts(section, data, isRange) {
+    let labels, getSeries;
 
-    if (!isRange) {
-      // Single-day view → force a full 00:00:00–23:59:xx axis, downsampled
-      // so we're not asking Chart.js to draw tens of thousands of points.
-      const rawGridLabels = buildDayGridLabels(); // e.g. 720 pts at 2-min resolution
-      labels = downsample(rawGridLabels, 400);
-      getSeries = (key) => {
-        const aligned = alignSeriesToDayGrid(rawGridLabels, data.timestamps, data[key]);
-        return downsample(aligned, 400);
-      };
+    if (isRange && data.isRange) {
+      labels = data.dates;
+      getSeries = (key, stat) => (data.daily[key] && data.daily[key][stat]) || [];
+    } if (!isRange) {
+  const rawGridLabels = buildDayGridLabels();
+  labels = downsample(rawGridLabels, 400);
+  getSeries = (key) => downsample(alignBucketedToGrid(rawGridLabels, data.timestamps, data[key]), 400);
+} else {
+      labels = data.timestamps || [];
+      getSeries = (key) => data[key] || [];
     }
+
     section.charts.forEach(ch => {
       const canvas = document.getElementById(ch.id);
       if (!canvas) return;
-      const useBar = isRange || ch.bar;
-      const datasets = ch.datasets.map(ds => ({
-        label: ds.label, data: getSeries(ds.key),
-        borderColor: ds.color,
-        backgroundColor: useBar ? ds.color + 'BB' : ds.color + '18',
-        borderWidth: useBar ? 0 : 2,
-        borderRadius: useBar ? 6 : 0,
-        tension: 0.35, pointRadius: (!useBar && labels.length < 120) ? 2 : 0,
-        spanGaps: false,
-        fill: ds.fill || false, yAxisID: ds.yAxis || 'y'
-      }));
-      const scales = ch.dualAxis
-        ? { x: xScale(), yL: yScale('left'), yR: yScale('right') }
-        : { x: xScale(), y: yScale() };
-      if (!ch.dualAxis) datasets.forEach(d => { d.yAxisID = 'y'; });
+
+      let datasets;
+      if (isRange && data.isRange) {
+        datasets = ch.datasets.flatMap(ds => ([
+          { label: ds.label + ' Max', data: getSeries(ds.key, 'max'), borderColor: ds.color, backgroundColor: 'transparent', borderWidth: 1.5, borderDash: [4,3], pointRadius: 2, tension: 0.3, yAxisID: ds.yAxis || 'y' },
+          { label: ds.label + ' Avg', data: getSeries(ds.key, 'avg'), borderColor: ds.color, backgroundColor: ds.color + '20', borderWidth: 2.5, pointRadius: 3, tension: 0.3, fill: false, yAxisID: ds.yAxis || 'y' },
+          { label: ds.label + ' Min', data: getSeries(ds.key, 'min'), borderColor: ds.color, backgroundColor: 'transparent', borderWidth: 1.5, borderDash: [2,2], pointRadius: 2, tension: 0.3, yAxisID: ds.yAxis || 'y' }
+        ]));
+      } else {
+        const useBar = ch.bar;
+        datasets = ch.datasets.map(ds => ({
+          label: ds.label, data: getSeries(ds.key), borderColor: ds.color,
+          backgroundColor: useBar ? ds.color + 'BB' : ds.color + '18',
+          borderWidth: useBar ? 0 : 2, borderRadius: useBar ? 6 : 0,
+         tension: 0.35, pointRadius: (!useBar && labels.length < 120) ? 2 : 0,
+spanGaps: true, fill: ds.fill || false, yAxisID: ds.yAxis || 'y'
+        }));
+      }
+
+      const scales = ch.dualAxis ? { x: xScale(), yL: yScale('left'), yR: yScale('right') } : { x: xScale(), y: yScale() };
+
       detailCharts[ch.id] = new Chart(canvas.getContext('2d'), {
-        type: useBar ? 'bar' : 'line',
+        type: (isRange && data.isRange) ? 'line' : (ch.bar ? 'bar' : 'line'),
         data: { labels, datasets },
         options: {
-responsive: true, maintainAspectRatio: false, animation: { duration: 0 },
+          responsive: true, maintainAspectRatio: false, animation: { duration: 0 },
           interaction: { mode: 'index', intersect: false },
           plugins: {
             legend: { position: 'bottom', labels: { font: { family: 'JetBrains Mono', size: 10 }, boxWidth: 10, padding: 12, color: '#4A5568' } },
@@ -2107,7 +2161,7 @@ responsive: true, maintainAspectRatio: false, animation: { duration: 0 },
       });
     });
     applyTrendFilter(activeTrend);
-  }
+}
 
   function buildChartsHTML(section) {
     return section.charts.map(ch => `
@@ -2128,15 +2182,155 @@ responsive: true, maintainAspectRatio: false, animation: { duration: 0 },
     });
   }
 
-  function renderDetailBody(section, data, isRange = false) {
-    const pts = (data.timestamps || []).length;
+function renderDetailBody(section, data, isRange = false) {
+    const pts = data.isRange ? data.pointCount : (data.timestamps || []).length;
     document.getElementById('gsdPtsLabel').textContent = pts ? `${pts.toLocaleString()} data points` : '';
     const body = document.getElementById('gsdBody');
+    const engineTimelinePanel = currentSection === 'engine' ? `
+      <div class="gsd-chart-panel" id="engineTimelinePanel">
+        <div class="gsd-chart-header"><span class="gsd-chart-title">⏱️ Engine Run Timeline — When it started &amp; stopped</span></div>
+        <div id="engineTimelineBody" style="padding:8px 2px;color:#8A9BB5;font-size:.82rem">Loading…</div>
+      </div>` : '';
     body.innerHTML = `
       <div class="gsd-stats-row">${buildStatsHTML(section, data)}</div>
-      <div class="gsd-charts-area">${buildChartsHTML(section)}</div>`;
+      <div class="gsd-charts-area">
+        ${engineTimelinePanel}
+        ${buildChartsHTML(section)}
+      </div>`;
     destroyDetailCharts();
     renderDetailCharts(section, data, isRange);
+    if (currentSection === 'engine') {
+      const from = document.getElementById('gsdFrom').value;
+      const to   = document.getElementById('gsdTo').value;
+      loadEngineTimeline(from, to);
+    }
+}
+
+function timeStrToSec(t) {
+    const p = String(t).split(':').map(Number);
+    if (p.length < 3 || p.some(isNaN)) return null;
+    return p[0] * 3600 + p[1] * 60 + p[2];
+  }
+
+  function formatDur(sec) {
+    if (sec == null || isNaN(sec)) return '—';
+    const h = Math.floor(sec / 3600);
+    const m = Math.round((sec % 3600) / 60);
+    return `${h}h ${m}m`;
+  }
+
+  function pairEngineEvents(events) {
+    const pairs = [];
+    let openStart = null;
+    events.forEach(e => {
+      if (e.type === 'start') {
+        openStart = e;
+      } else if (e.type === 'stop' && openStart) {
+        pairs.push({ start: openStart, stop: e });
+        openStart = null;
+      }
+    });
+    if (openStart) pairs.push({ start: openStart, stop: null }); // still running
+    return pairs;
+  }
+
+  async function loadEngineTimeline(from, to) {
+    const container = document.getElementById('engineTimelineBody');
+    if (!container) return;
+    try {
+      const url = from === to ? `/api/engine/events?date=${from}` : `/api/engine/events?from=${from}&to=${to}`;
+      const r = await fetch(url);
+      const json = await r.json();
+      renderEngineTimelineHTML(container, json.events || [], from, to);
+    } catch (e) {
+      container.innerHTML = `<div style="padding:16px 0;color:#8A9BB5">Could not load run events: ${e.message}</div>`;
+    }
+  }
+
+  function renderEngineTimelineHTML(container, events, from, to) {
+    const isRange = from !== to;
+
+    if (!events.length) {
+      container.innerHTML = `<div style="padding:16px 0;color:#8A9BB5;font-size:.82rem">No start/stop events recorded for this ${isRange ? 'range' : 'day'} yet.</div>`;
+      return;
+    }
+
+    // ── RANGE MODE — simple table grouped by date ──
+    if (isRange) {
+      const byDate = {};
+      events.forEach(e => { (byDate[e.date] = byDate[e.date] || []).push(e); });
+      let rows = '';
+      Object.keys(byDate).sort().forEach(date => {
+        pairEngineEvents(byDate[date]).forEach(p => {
+          rows += `<tr>
+            <td style="padding:7px 10px;border-bottom:1px solid #F0F4FF">${date}</td>
+            <td style="padding:7px 10px;border-bottom:1px solid #F0F4FF">▶ ${p.start.time}</td>
+            <td style="padding:7px 10px;border-bottom:1px solid #F0F4FF">${p.stop ? '⏹ ' + p.stop.time : '🟢 Still running'}</td>
+            <td style="padding:7px 10px;border-bottom:1px solid #F0F4FF;font-weight:800">${formatDur(p.stop ? p.stop.durationSec : null)}</td>
+          </tr>`;
+        });
+      });
+      container.innerHTML = `
+        <table style="width:100%;border-collapse:collapse;font-size:.78rem;font-family:'JetBrains Mono',monospace">
+          <thead><tr style="background:#F0F4FF">
+            <th style="text-align:left;padding:7px 10px">Date</th>
+            <th style="text-align:left;padding:7px 10px">Started</th>
+            <th style="text-align:left;padding:7px 10px">Stopped</th>
+            <th style="text-align:left;padding:7px 10px">Duration</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>`;
+      return;
+    }
+
+    // ── SINGLE-DAY MODE — 00:00→23:59 visual bar + table ──
+    const pairs = pairEngineEvents(events);
+    const nowSec = timeStrToSec(new Date().toLocaleTimeString('en-IN', { hour12: false }));
+
+    let barSegments = '';
+    pairs.forEach(p => {
+      const s = timeStrToSec(p.start.time);
+      const e = p.stop ? timeStrToSec(p.stop.time) : nowSec;
+      if (s == null || e == null) return;
+      const leftPct  = (s / 86400 * 100).toFixed(2);
+      const widthPct = Math.max(0.3, ((e - s) / 86400 * 100)).toFixed(2);
+      barSegments += `<div title="${p.start.time} → ${p.stop ? p.stop.time : 'now'}"
+        style="position:absolute;left:${leftPct}%;width:${widthPct}%;top:0;bottom:0;background:#059669;border-radius:3px"></div>`;
+    });
+
+    let rows = '';
+    pairs.forEach(p => {
+      const dur = p.stop ? p.stop.durationSec : (nowSec - timeStrToSec(p.start.time));
+      rows += `<tr>
+        <td style="padding:7px 10px;border-bottom:1px solid #F0F4FF">▶ ${p.start.time}</td>
+        <td style="padding:7px 10px;border-bottom:1px solid #F0F4FF">${p.stop ? '⏹ ' + p.stop.time : '🟢 Still running'}</td>
+        <td style="padding:7px 10px;border-bottom:1px solid #F0F4FF;font-weight:800;color:#059669">${formatDur(dur)}</td>
+      </tr>`;
+    });
+
+    const totalRunSec = pairs.reduce((sum, p) =>
+      sum + (p.stop ? p.stop.durationSec : (nowSec - timeStrToSec(p.start.time))), 0);
+
+    container.innerHTML = `
+      <div style="padding:2px 0 14px">
+        <div style="position:relative;height:26px;background:#F0F4FF;border-radius:6px;overflow:hidden;margin-bottom:6px">
+          ${barSegments}
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:10px;color:#8A9BB5;font-weight:700">
+          <span>12:00 AM</span><span>06:00</span><span>12:00 PM</span><span>18:00</span><span>11:59 PM</span>
+        </div>
+      </div>
+      <div style="font-size:.82rem;font-weight:800;color:#1A2340;margin-bottom:10px">
+        Total run time today: <span style="color:#059669">${formatDur(totalRunSec)}</span> across ${pairs.length} run period(s)
+      </div>
+      <table style="width:100%;border-collapse:collapse;font-size:.78rem;font-family:'JetBrains Mono',monospace">
+        <thead><tr style="background:#F0F4FF">
+          <th style="text-align:left;padding:7px 10px">Started</th>
+          <th style="text-align:left;padding:7px 10px">Stopped</th>
+          <th style="text-align:left;padding:7px 10px">Duration</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
   }
 
   function compressToDailyAverages(data, from, to) {
@@ -2158,7 +2352,7 @@ responsive: true, maintainAspectRatio: false, animation: { duration: 0 },
   }
 
 async function loadDetailData(from, to) {
-    const requestedSection = currentSection;   // snapshot — guards against races
+    const requestedSection = currentSection;
     const body = document.getElementById('gsdBody');
     const isRange = from !== to;
     body.innerHTML = `<div class="gsd-loading"><div class="gsd-spinner"></div><span>Fetching data for ${from}${isRange ? ' → ' + to : ''}…</span></div>`;
@@ -2167,27 +2361,19 @@ async function loadDetailData(from, to) {
     let data;
     try {
       const json = await fetchHistoryCached(from, to);
-
-      // If the overlay was closed or switched sections while this was in flight,
-      // drop the response — rendering it now would crash (stale section) or
-      // show the wrong section's data.
       if (currentSection !== requestedSection) return;
-
-      if (!json.timestamps || json.timestamps.length === 0 || json.noData) {
-        data = seedFromDayStore(requestedSection);
-      } else {
-        data = isRange ? compressToDailyAverages(json, from, to) : json;
-      }
+      const empty = json.noData || (!json.isRange && (!json.timestamps || json.timestamps.length === 0));
+      data = empty ? seedFromDayStore(requestedSection) : json;
     } catch(e) {
       console.error('[Detail] Fetch error:', e.message);
       if (currentSection !== requestedSection) return;
       data = seedFromDayStore(requestedSection);
     }
 
-    if (currentSection !== requestedSection) return; // final guard
+    if (currentSection !== requestedSection) return;
     currentData    = data;
-    currentIsRange = isRange;
-    renderDetailBody(SECTIONS[requestedSection], data, isRange);
+    currentIsRange = !!data.isRange;
+    renderDetailBody(SECTIONS[requestedSection], data, currentIsRange);
 }
 
 
@@ -2248,8 +2434,41 @@ function seedFromDayStore(sectionKey) {
 }
 
   function exportCSV() {
-    if (!currentData || !currentData.timestamps) return;
+    if (!currentData) return;
     const section = SECTIONS[currentSection];
+    const from = document.getElementById('gsdFrom').value;
+    const to   = document.getElementById('gsdTo').value;
+
+    // ── RANGE MODE — export the per-day Min/Max/Avg/Last table ──
+    if (currentIsRange && currentData.isRange) {
+      const keys = [...new Set([
+        ...section.statsKeys.map(s => s.key),
+        ...section.charts.flatMap(c => c.datasets.map(d => d.key))
+      ])];
+      const header = ['date', ...keys.flatMap(k => [`${k}_min`, `${k}_max`, `${k}_avg`, `${k}_last`])];
+      const rows = [header.join(',')];
+
+      (currentData.dates || []).forEach((date, i) => {
+        const row = [date];
+        keys.forEach(k => {
+          const d = currentData.daily && currentData.daily[k];
+          row.push(d ? d.min[i]  ?? '' : '');
+          row.push(d ? d.max[i]  ?? '' : '');
+          row.push(d ? d.avg[i]  ?? '' : '');
+          row.push(d ? d.last[i] ?? '' : '');
+        });
+        rows.push(row.join(','));
+      });
+
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([rows.join('\n')], { type: 'text/csv' }));
+      a.download = `gensight_${currentSection}_${from}_${to}_daily_summary.csv`;
+      a.click();
+      return;
+    }
+
+    // ── SINGLE-DAY MODE — unchanged, raw point-by-point export ──
+    if (!currentData.timestamps) return;
     const keys = ['timestamps', ...section.statsKeys.map(s => s.key), ...section.charts.flatMap(c => c.datasets.map(d => d.key))];
     const unique = [...new Set(keys)];
     const rows = [unique.join(',')];
@@ -2258,9 +2477,9 @@ function seedFromDayStore(sectionKey) {
     }
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([rows.join('\n')], { type: 'text/csv' }));
-    a.download = `gensight_${currentSection}_${document.getElementById('gsdFrom').value}_${document.getElementById('gsdTo').value}.csv`;
+    a.download = `gensight_${currentSection}_${from}_${to}.csv`;
     a.click();
-  }
+}
 
 function todayStr()    { return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }); }
   function daysAgoStr(n) { const d = new Date(); d.setDate(d.getDate() - n); return d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }); }
@@ -2319,8 +2538,9 @@ function todayStr()    { return new Date().toLocaleDateString('en-CA', { timeZon
   });
 
   // ── Live push from main render() ───────────────────────────
-  window.gsDetailPush = function(latest) {
+ window.gsDetailPush = function(latest) {
     if (!overlayEl.classList.contains('open') || !currentSection || !currentData) return;
+    if (currentIsRange) return;
     const section = SECTIONS[currentSection];
     const ac = latest.ac || {}, eng = latest.engine || {}, elec = latest.electrical || {};
     const fuel = latest.fuel || {}, util = latest.utility || {};
@@ -2374,7 +2594,7 @@ function todayStr()    { return new Date().toLocaleDateString('en-CA', { timeZon
   // ── Restore on page refresh ────────────────────────────────
   const _savedSection = sessionStorage.getItem('gsDetailOpen');
   if (_savedSection && SECTIONS[_savedSection]) {
-    openDetail(_savedSection);
+    setTimeout(() => openDetail(_savedSection), 1500);
   }
 
   // ── Response cache — avoid re-fetching the same date range repeatedly ──

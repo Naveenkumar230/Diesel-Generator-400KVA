@@ -4254,3 +4254,6 @@ body {
   width: 100%;
   max-width: 100%;
 }
+
+.fss-value.noise { color: #D97706; }
+.fss-value.noise-high { color: #DC2626; }

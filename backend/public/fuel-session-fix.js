@@ -1,16 +1,20 @@
 'use strict';
 // ════════════════════════════════════════════════════════════════
-//  FUEL SESSION TRACKER v2
+//  FUEL SESSION TRACKER v4
 //  - Daily session resets at 12:00 AM (midnight)
 //  - Engine hours today = current minus midnight snapshot
 //  - Day-1 cumulative never resets
 //  - Stores everything in localStorage with date keys
+//  - Sensor-noise detection: a fuel drop while the engine is NOT
+//    running (no voltage/current/RPM) is logged as noise for TODAY
+//    ONLY. It resets every midnight with the rest of the session and
+//    is never added to Day-1 lifetime totals or consumption totals.
 // ════════════════════════════════════════════════════════════════
 (function () {
 
   const TANK_CAP = 780;
 
-function todayKey() {
+  function todayKey() {
     return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
   }
 
@@ -37,7 +41,7 @@ function todayKey() {
   }
 
   // Store daily summaries for 7-day graph
-  // key: 'fuelDaily_YYYY-MM-DD' => { consumedL, engHours, peakKw, avgKw }
+  // key: 'fuelDaily_YYYY-MM-DD' => { consumedL, engHours, peakKw, avgKw, noiseL }
   function getDailyRecord(dateKey) {
     try {
       const raw = localStorage.getItem('fuelDaily_' + dateKey);
@@ -62,19 +66,24 @@ function todayKey() {
         consumedL:  rec ? rec.consumedL  : 0,
         engHours:   rec ? rec.engHours   : 0,
         peakKw:     rec ? rec.peakKw     : 0,
-        avgKw:      rec ? rec.avgKw      : 0
+        avgKw:      rec ? rec.avgKw      : 0,
+        noiseL:     rec ? (rec.noiseL || 0) : 0
       });
     }
     return records;
   }
 
- window.FuelSession = {
+  window.FuelSession = {
 
-    update: function(currentPct, currentLitres, currentEngH, currentKw) {
+    // isRunning = true when the engine is confirmed producing power
+    // (voltage/current/RPM present). Passed in from fuel-render-patch.js
+    // via window._gsIsRunning, which app.js sets on every render() tick.
+    update: function(currentPct, currentLitres, currentEngH, currentKw, isRunning) {
       const today = todayKey();
       const now   = Date.now();
 
       // ── Day-1 baseline (set once, never touched again) ──────
+      // NOTE: Day-1 does NOT track noise. Noise is a today-only concept.
       let day1 = getDay1();
       if (!day1) {
         day1 = {
@@ -88,8 +97,12 @@ function todayKey() {
         saveDay1(day1);
       }
 
-      // Detect a real burn (litres went down since last reading)
-      if (currentLitres < day1.lastLitres) {
+      // Detect a real burn (litres went down since last reading).
+      // Day-1's pointer still needs to move on EVERY reading (running or
+      // not) so a noisy dip doesn't get "caught up" and double counted
+      // once the engine actually starts — but only ADD to cumConsumedL
+      // when the engine was confirmed running.
+      if (currentLitres < day1.lastLitres && isRunning) {
         day1.cumConsumedL += (day1.lastLitres - currentLitres);
       }
       day1.lastLitres = currentLitres;
@@ -105,15 +118,26 @@ function todayKey() {
           startEngH:      currentEngH,        // hours snapshot at 12:00 AM today
           lastLitres:     currentLitres,       // running pointer for today
           cumConsumedL:   0,                   // today's burn-only total
+          noiseL:         0,                   // TODAY-ONLY noise total — resets at midnight
+          noiseEvents:    0,                   // TODAY-ONLY noise event count
           savedAt:        now,
           kwReadings:     []
         };
         saveSession(session);
       }
+      // Backfill for sessions saved before this patch existed
+      if (session.noiseL === undefined)      session.noiseL = 0;
+      if (session.noiseEvents === undefined) session.noiseEvents = 0;
 
-      // Detect today's burn the same refill-safe way
+      // Detect today's burn vs today's noise, gated on engine running state.
       if (currentLitres < session.lastLitres) {
-        session.cumConsumedL += (session.lastLitres - currentLitres);
+        const drop = session.lastLitres - currentLitres;
+        if (isRunning) {
+          session.cumConsumedL += drop;
+        } else {
+          session.noiseL      += drop;
+          session.noiseEvents += 1;
+        }
       }
       session.lastLitres = currentLitres;
 
@@ -133,32 +157,35 @@ function todayKey() {
         consumedL:  consumedL,
         engHours:   +todayEngH.toFixed(2),
         peakKw:     +peakKw.toFixed(1),
-        avgKw:      +avgKw.toFixed(1)
+        avgKw:      +avgKw.toFixed(1),
+        noiseL:     Math.round(session.noiseL)
       });
 
       saveSession(session);
 
       // ── Lifetime values ──────────────────────────────────────
-      const lifetimeEngHours = currentEngH; // raw PLC counter, since Day 1 commissioning — no subtraction
+      const lifetimeEngHours = currentEngH; // raw PLC counter, since Day 1 commissioning
       const day1ConsumedL    = Math.round(day1.cumConsumedL); // refill-safe cumulative since Day 1
 
       return {
         // Today
-        sessionStartL:   session.startL,
-        sessionStartPct: session.startPct,
-        consumedL:       consumedL,
-        consumedPct:     consumedPct.toFixed(1),
-        todayEngHours:   todayEngH.toFixed(2),
-        todayPeakKw:     peakKw.toFixed(1),
-        todayAvgKw:      avgKw.toFixed(1),
-        // Lifetime / Day-1
-        day1StartL:      day1.startL,
-        day1StartPct:    day1.startPct,
-        day1StartDate:   day1.startDate,
-        day1ConsumedL:   day1ConsumedL,     // Total Since Day 1 (L) — refill-safe
-        totalEngHours:   lifetimeEngHours.toFixed(2), // Lifetime Engine Hours — raw PLC value
+        sessionStartL:    session.startL,
+        sessionStartPct:  session.startPct,
+        consumedL:        consumedL,
+        consumedPct:      consumedPct.toFixed(1),
+        todayEngHours:    todayEngH.toFixed(2),
+        todayPeakKw:      peakKw.toFixed(1),
+        todayAvgKw:       avgKw.toFixed(1),
+        todayNoiseL:      Math.round(session.noiseL),      // TODAY only — resets at midnight
+        todayNoiseEvents: session.noiseEvents,              // TODAY only
+        // Lifetime / Day-1 (no noise fields here — Day-1 is not noise-tracked)
+        day1StartL:       day1.startL,
+        day1StartPct:     day1.startPct,
+        day1StartDate:    day1.startDate,
+        day1ConsumedL:    day1ConsumedL,     // Total Since Day 1 (L) — refill-safe
+        totalEngHours:    lifetimeEngHours.toFixed(2), // Lifetime Engine Hours — raw PLC value
         // 7-day
-        last7Days:       getLast7Days()
+        last7Days:        getLast7Days()
       };
     },
 

@@ -15,15 +15,30 @@ const PORT            = process.env.PORT || 3000;
 const MAX_HISTORY     = 60;    // live rolling window (~2 min at 2s polls)
 const MAX_DAY_POINTS  = 43200; // 24h at 2s = 43200 points max per day
 
+const compression = require('compression');
+
 const app    = express();
 const server = http.createServer(app);
 const io     = new Server(server, {
     cors: { origin: '*', methods: ['GET', 'POST'] }
 });
 
+app.use(compression());  // gzip all responses — cuts JS/CSS/HTML/JSON size ~70-80%
 app.use(cors());
 app.use(express.json({ limit: '512kb' }));
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), {
+  maxAge: '1d',   // browser caches static files for a day — instant on repeat visits
+  etag: true
+}));
+
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    const ms = Date.now() - start;
+    if (ms > 200) console.warn(`[SLOW] ${req.method} ${req.originalUrl} took ${ms}ms`);
+  });
+  next();
+});
 
 // ════════════════════════════════════════════════════════════════
 //  MONGODB CONNECTION
@@ -42,9 +57,15 @@ async function connectMongo() {
     });
     db = client.db(MONGO_DB);
 console.log('[MongoDB] Connected ✓  db =', MONGO_DB);
+db.collection('fuel_events').createIndex({ date: 1, category: 1 });
+db.collection('history').createIndex({ date: 1, timestamps: 1 });
+db.collection('engine_events').createIndex({ date: 1, timestamp: 1 }); // ADD THIS
+
 loadRefillCache();
 loadGensetSettings();
-loadRuntimeState();   
+loadRuntimeState();
+loadEngineHoursBaseline();   // ADD THIS
+
   } catch (e) {
     console.error('[MongoDB] Connection failed:', e.message);
     console.log('[MongoDB] Retrying in 15s...');
@@ -136,6 +157,11 @@ let gensetSettings = {
   _lastServiceMilestone: 0
 };
 
+let engineHoursBaseline = { dateKey: null, baselineHours: null };
+
+// ── Engine start/stop event tracking ──
+let engineRunTracker = { isRunning: null, lastStartTs: null };
+
 async function loadGensetSettings() {
   if (!db) return;
   try {
@@ -200,11 +226,114 @@ app.get('/api/test-email/:type', async (req, res) => {
 
 // ── Refill detection state ───────────────────────────────────
 const REFILL_THRESHOLD_L = 30; // litres jump to count as refill
+const HISTORY_RPM_THRESHOLD = 100;       // engine considered "running" above this
+const IDLE_HEARTBEAT_MS     = 5 * 60000; // 1 snapshot every 5 min while idle — keeps charts continuous, cheap on storage
+let _lastIdleHistorySaveMs  = 0;
 
 let refillTracker = {
   prevFuelL:    null,   // last known fuel litres
   prevFuelPct:  null,   // last known fuel %
 };
+
+
+// ── Fuel consumption/noise classifier state ───────────────
+let fuelClassifyTracker = { prevFuelL: null };
+
+const RUN_VOLT_THRESHOLD = 20;   // volts — filters sensor floor
+const RUN_CURR_THRESHOLD = 2;    // amps
+const RUN_RPM_THRESHOLD  = 100;  // rpm
+
+
+function trackEngineRunEvents(row, dk, ts, lifetimeHours) {
+  const running = isEngineRunning(row);
+
+  if (engineRunTracker.isRunning === null) {
+    engineRunTracker.isRunning = running;
+    if (running) engineRunTracker.lastStartTs = Date.now();
+    return;
+  }
+
+  if (running && !engineRunTracker.isRunning) {
+    // Engine just started
+    engineRunTracker.lastStartTs = Date.now();
+    const doc = { date: dk, type: 'start', time: ts, timestamp: new Date().toISOString(), lifetimeHours };
+    if (db) db.collection('engine_events').insertOne(doc)
+      .catch(e => console.error('[EngineEvents] insert error:', e.message));
+    console.log(`[EngineEvents] ▶ Started at ${ts}`);
+  } else if (!running && engineRunTracker.isRunning) {
+    // Engine just stopped
+    const durationSec = engineRunTracker.lastStartTs
+      ? Math.round((Date.now() - engineRunTracker.lastStartTs) / 1000)
+      : null;
+    const doc = { date: dk, type: 'stop', time: ts, timestamp: new Date().toISOString(), durationSec, lifetimeHours };
+    if (db) db.collection('engine_events').insertOne(doc)
+      .catch(e => console.error('[EngineEvents] insert error:', e.message));
+    console.log(`[EngineEvents] ⏹ Stopped at ${ts}${durationSec ? ` (ran ${(durationSec/3600).toFixed(2)}h)` : ''}`);
+    engineRunTracker.lastStartTs = null;
+  }
+
+  engineRunTracker.isRunning = running;
+}
+
+
+function isEngineRunning(row) {
+  const vMax = Math.max(row.voltL1N, row.voltL2N, row.voltL3N);
+  const cMax = Math.max(row.currL1, row.currL2, row.currL3);
+  return vMax > RUN_VOLT_THRESHOLD || cMax > RUN_CURR_THRESHOLD || row.engineRPM > RUN_RPM_THRESHOLD;
+}
+
+// Called from appendHistory() on every reading, AFTER detectRefill()
+// so a real refill jump never gets double-classified as "noise recovery".
+function classifyFuelEvent(row, dk, ts) {
+  const fuelL = row.fuelLevelL > 0 ? row.fuelLevelL : Math.round(row.fuelLevelPct * 780 / 100);
+
+  if (fuelClassifyTracker.prevFuelL === null) {
+    fuelClassifyTracker.prevFuelL = fuelL;
+    return;
+  }
+
+  const prevL = fuelClassifyTracker.prevFuelL;
+  const delta = prevL - fuelL;           // positive = level dropped
+  fuelClassifyTracker.prevFuelL = fuelL;
+
+  if (delta === 0) return;
+  if (Math.abs(delta) >= REFILL_THRESHOLD_L) return; // real refills are handled by detectRefill()
+
+  const running = isEngineRunning(row);
+  let category;
+  if (delta > 0) {
+    category = running ? 'actual_consumption' : 'sensor_noise';
+  } else {
+    // level went UP by a small amount while not refilling — this is the
+    // "noise recovers" case from business rule 3 (e.g. sloshing settling back)
+    category = running ? 'actual_consumption_correction' : 'sensor_noise_recovery';
+  }
+
+  const doc = {
+    date: dk,
+    time: ts,
+    timestamp: new Date().toISOString(),
+    fuelBeforeL: prevL,
+    fuelAfterL:  fuelL,
+    deltaL:      delta,           // +ve = drop, -ve = recovered
+    category,
+    running,
+    voltMax:    Math.max(row.voltL1N, row.voltL2N, row.voltL3N),
+    currMax:    Math.max(row.currL1, row.currL2, row.currL3),
+    engineRPM:  row.engineRPM,
+    kwTotal:    row.kwTotal
+  };
+
+  if (db) {
+    db.collection('fuel_events').insertOne(doc)
+      .catch(e => console.error('[FuelClassify] insert error:', e.message));
+  } else {
+    fuelEventCache.unshift(doc);
+    if (fuelEventCache.length > 2000) fuelEventCache.pop();
+  }
+}
+
+let fuelEventCache = []; // in-memory fallback when db is down
 
 // ── Server-side "today" trackers — run 24/7, independent of browser ──
 let engineHoursToday = { dateKey: null, seconds: 0, lastTs: null };
@@ -224,6 +353,20 @@ async function loadRuntimeState() {
   } catch (e) { console.error('[Runtime] load error:', e.message); }
 }
 
+async function loadEngineHoursBaseline() {
+  if (!db) return;
+  try {
+    const doc = await db.collection('runtime').findOne({ _id: 'engineHoursBaseline' });
+    const dk = todayKey();
+    if (doc && doc.dateKey === dk) {
+      engineHoursBaseline = { dateKey: doc.dateKey, baselineHours: doc.baselineHours };
+      console.log(`[EngineHours] Restored baseline: ${doc.baselineHours}h for ${dk}`);
+    }
+  } catch (e) {
+    console.error('[EngineHours] load error:', e.message);
+  }
+}
+
 async function saveRuntimeState() {
   if (!db) return;
   try {
@@ -239,6 +382,28 @@ async function saveRuntimeState() {
     );
   } catch (e) { console.error('[Runtime] save error:', e.message); }
 }
+
+// Called on every MQTT reading. Sets today's baseline the first time we see
+// a new day, then returns (lifetime hours now − baseline) = today's hours.
+function updateEngineHoursBaseline(lifetimeHours) {
+  const dk = todayKey();
+
+  if (engineHoursBaseline.dateKey !== dk || engineHoursBaseline.baselineHours == null) {
+    engineHoursBaseline = { dateKey: dk, baselineHours: lifetimeHours };
+    if (db) {
+      db.collection('runtime').updateOne(
+        { _id: 'engineHoursBaseline' },
+        { $set: { dateKey: dk, baselineHours: lifetimeHours } },
+        { upsert: true }
+      ).catch(e => console.error('[EngineHours] save baseline error:', e.message));
+    }
+    console.log(`[EngineHours] New day baseline set: ${lifetimeHours}h`);
+  }
+
+  return Math.max(0, +(lifetimeHours - engineHoursBaseline.baselineHours).toFixed(3));
+}
+
+let engineHoursTodayComputed = 0; // updated every reading, read by buildBroadcast/api
 
 function updateEngineHoursTodayServer(isRunning) {
   const nowKey = todayKey();
@@ -394,6 +559,24 @@ app.patch('/api/refills/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
+// DELETE — wipe all refill history records
+app.delete('/api/refills', async (req, res) => {
+  try {
+    refillCache = [];
+    refillTracker.prevFuelL   = null;
+    refillTracker.prevFuelPct = null;
+    if (db) {
+      const result = await db.collection('refills').deleteMany({});
+      return res.json({ ok: true, deletedCount: result.deletedCount });
+    }
+    res.json({ ok: true, deletedCount: 0, note: 'DB not connected, memory cache cleared only' });
+  } catch (e) {
+    console.error('[Refill] DELETE error:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+
 // POST — manual refill record (from UI manual entry)
 app.post('/api/refills', async (req, res) => {
   const { beforeL, afterL, person, time } = req.body;
@@ -425,6 +608,53 @@ app.post('/api/refills', async (req, res) => {
   refillCache.unshift(record);
   io.emit('refill:detected', record);
   res.json({ ok: true, record });
+});
+
+// GET — fast fuel session baseline (start-of-day litres/pct)
+app.get('/api/fuel/session-start', async (req, res) => {
+  const dk = req.query.date || todayKey();
+  if (!db) {
+    return res.json({
+      date: dk,
+      litres: fuelSession.dateKey === dk ? fuelSession.startL   : null,
+      pct:    fuelSession.dateKey === dk ? fuelSession.startPct : null
+    });
+  }
+  try {
+    const doc = await db.collection('history')
+      .find({ date: dk, fuelLevelL: { $gt: 0 } },
+             { projection: { _id: 0, fuelLevelL: 1, fuelLevelPct: 1, timestamps: 1 } })
+      .sort({ timestamps: 1 })
+      .limit(1)
+      .toArray();
+    if (!doc.length) return res.json({ date: dk, litres: null, pct: null });
+    res.json({ date: dk, litres: doc[0].fuelLevelL, pct: doc[0].fuelLevelPct });
+  } catch (e) {
+    console.error('[FuelSession] error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
+// GET — granular audit trail (Detail page)
+app.get('/api/fuel/events', async (req, res) => {
+  const { date, from, to, category } = req.query;
+  if (!db) return res.json({ count: 0, events: [] });
+
+  let query = {};
+  if (date) query.date = date;
+  else if (from && to) query.date = { $gte: from, $lte: to };
+  else query.date = todayKey();
+  if (category) query.category = category;
+
+  try {
+    const events = await db.collection('fuel_events')
+      .find(query).sort({ timestamp: 1 }).limit(5000).toArray();
+    res.json({ count: events.length, events });
+  } catch (e) {
+    console.error('[FuelEvents] error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ════════════════════════════════════════════════════════════════
@@ -734,11 +964,28 @@ const ts = new Date().toLocaleTimeString('en-IN', { hour12: false, timeZone: 'As
     ? row.fuelLevelL
     : Math.round(row.fuelLevelPct * 780 / 100);
   detectRefill(_fuelL, row.fuelLevelPct, ts);
+    classifyFuelEvent(row, dk, ts);   // ← add this line
+    // ── Engine hours today + start/stop tracking ───────────────
+  const lifetimeHours = parseFloat(eng.hours) || 0;
+  engineHoursTodayComputed = updateEngineHoursBaseline(lifetimeHours);
+  trackEngineRunEvents(row, dk, ts, lifetimeHours);
 
   // ── Threshold-based email alerts ───────────────────────────
   checkAlertThresholds(row, payload);
 
-  if (db) {
+  // ── Only persist to 'history' when the DG is actually running ──
+  // (RPM is the strictest, most reliable "running" signal — no false
+  // positives from voltage/current sensor noise while idle)
+  // ── Persist to 'history' ──
+  // Running: store every reading (full resolution, same as before).
+  // Idle: store a low-frequency heartbeat so daily/multi-day charts stay
+  //       continuous (real batt/coolant/fuel values, not stored gaps).
+  const isRunningForHistory = row.engineRPM > HISTORY_RPM_THRESHOLD;
+  const nowMs = Date.now();
+  const idleHeartbeatDue = !isRunningForHistory && (nowMs - _lastIdleHistorySaveMs >= IDLE_HEARTBEAT_MS);
+
+  if (db && (isRunningForHistory || idleHeartbeatDue)) {
+    if (!isRunningForHistory) _lastIdleHistorySaveMs = nowMs;
     const doc = { ...row, date: dk };
     db.collection('history')
       .insertOne(doc)
@@ -911,12 +1158,85 @@ app.get('/api/dates', (req, res) => {
     res.json({ dates, count: dates.length });
 });
 
+app.get('/api/dates', (req, res) => {
+    const dates = Object.keys(dateStore).sort();
+    res.json({ dates, count: dates.length });
+});
+
+app.get('/api/engine/events', async (req, res) => {
+  const { date, from, to } = req.query;
+  if (!db) return res.json({ events: [] });
+
+  let query = {};
+  if (date) query.date = date;
+  else if (from && to) query.date = { $gte: from, $lte: to };
+  else query.date = todayKey();
+
+  try {
+    const events = await db.collection('engine_events')
+      .find(query).sort({ timestamp: 1 }).limit(2000).toArray();
+    res.json({ count: events.length, events });
+  } catch (e) {
+    console.error('[EngineEvents] fetch error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
+// GET — pre-aggregated per-day fuel/engine/power rollup (used by the 7-day daily-summary charts)
+app.get('/api/daily-rollup', async (req, res) => {
+  const { from, to } = req.query;
+  if (!from || !to) return res.status(400).json({ error: 'Provide ?from=YYYY-MM-DD&to=YYYY-MM-DD' });
+  if (!db) return res.json({ days: [] });
+
+  try {
+    const days = await db.collection('history').aggregate([
+      { $match: { date: { $gte: from, $lte: to } } },
+      { $sort: { date: 1, timestamps: 1 } },
+      { $group: {
+          _id: '$date',
+          count:        { $sum: 1 },
+          fuelFirst:    { $first: '$fuelLevelL' },
+          fuelLast:     { $last:  '$fuelLevelL' },
+          runSamples:   { $sum: { $cond: [{ $gt: ['$engineRPM', 200] }, 1, 0] } },
+          peakKw:       { $max: '$kwTotal' },
+          avgKw:        { $avg: '$kwTotal' },
+          peakKva:      { $max: '$kvaTotal' },
+          avgPf:        { $avg: '$pf' },
+          peakRpm:      { $max: '$engineRPM' },
+          maxCoolantF:  { $max: '$coolantTempF' },
+          minOilPsi:    { $min: { $cond: [{ $gt: ['$oilPressPsi', 0] }, '$oilPressPsi', null] } },
+          maxOilPsi:    { $max: '$oilPressPsi' },
+          avgBattV:     { $avg: '$battV' }
+      }},
+      { $sort: { _id: 1 } }
+    ]).toArray();
+
+    const result = days.map(d => ({
+      date:        d._id,
+      consumedL:   Math.max(0, Math.round((d.fuelFirst || 0) - (d.fuelLast || 0))),
+      engHours:    +((d.runSamples * 2 / 3600).toFixed(2)),
+      peakKw:      +(d.peakKw || 0).toFixed(1),
+      avgKw:       +(d.avgKw  || 0).toFixed(1),
+      peakKva:     +(d.peakKva || 0).toFixed(1),
+      avgPf:       +(d.avgPf  || 0).toFixed(3),
+      peakRpm:     Math.round(d.peakRpm || 0),
+      maxCoolantF: +(d.maxCoolantF || 0).toFixed(1),
+      minOilPsi:   +(d.minOilPsi || 0).toFixed(1),
+      maxOilPsi:   +(d.maxOilPsi || 0).toFixed(1),
+      avgBattV:    +(d.avgBattV || 0).toFixed(2)
+    }));
+    res.json({ days: result });
+  } catch (e) {
+    console.error('[DailyRollup] error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
 app.get('/api/history', async (req, res) => {
   const { date, from, to, keys } = req.query;
-
-  const wantedKeys = keys
-    ? keys.split(',').filter(k => HISTORY_KEYS.includes(k))
-    : HISTORY_KEYS;
+  const wantedKeys = keys ? keys.split(',').filter(k => HISTORY_KEYS.includes(k)) : HISTORY_KEYS;
 
   function emptyResponse() {
     const result = { pointCount: 0, noData: true, availableDates: Object.keys(dateStore).sort() };
@@ -924,51 +1244,97 @@ app.get('/api/history', async (req, res) => {
     return res.status(200).json(result);
   }
 
+  const isRange = from && to && from !== to;
+
   if (db) {
     try {
-      let query = {};
-      if (date) {
-        query.date = date;
-      } else if (from && to) {
+      if (date || (from && to && !isRange)) {
+  const q = date || from;
+  const numericKeys = wantedKeys.filter(k => k !== 'timestamps');
+
+  // Group by "HH:MM" (2-min buckets) — matches the frontend's own day-grid,
+  // so we send ~720 averaged rows instead of ~43,200 raw ones.
+  const groupStage = { _id: { $substrCP: ['$timestamps', 0, 5] }, count: { $sum: 1 } };
+  numericKeys.forEach(k => { groupStage[k] = { $avg: `$${k}` }; });
+
+  const buckets = await db.collection('history').aggregate([
+    { $match: { date: q } },
+    { $sort: { timestamps: 1 } },
+    { $group: groupStage },
+    { $sort: { _id: 1 } }
+  ]).toArray();
+
+  if (!buckets.length) return emptyResponse();
+
+  const result = { pointCount: buckets.length, rawPointCount: buckets.reduce((s,b)=>s+b.count,0) };
+  result.timestamps = buckets.map(b => b._id + ':00');
+  numericKeys.forEach(k => { result[k] = buckets.map(b => +(b[k] ?? 0).toFixed(3)); });
+  return res.json(result);
+}
+
+      if (from && to) {
         if (from > to) return res.status(400).json({ error: 'from must be <= to' });
-        query.date = { $gte: from, $lte: to };
-      } else {
-        return res.status(400).json({ error: 'Provide ?date=YYYY-MM-DD or ?from=...&to=...' });
+
+        // Multi-day range → aggregate min/max/avg PER DAY on the DB side
+        const numericKeys = wantedKeys.filter(k => k !== 'timestamps');
+        const groupStage = { _id: '$date', count: { $sum: 1 } };
+        numericKeys.forEach(k => {
+          groupStage[`${k}_min`]  = { $min: `$${k}` };
+          groupStage[`${k}_max`]  = { $max: `$${k}` };
+          groupStage[`${k}_avg`]  = { $avg: `$${k}` };
+          groupStage[`${k}_last`] = { $last: `$${k}` };
+        });
+
+        const days = await db.collection('history').aggregate([
+          { $match: { date: { $gte: from, $lte: to } } },
+          { $sort: { date: 1, timestamps: 1 } },
+          { $group: groupStage },
+          { $sort: { _id: 1 } }
+        ]).toArray();
+
+        if (!days.length) return emptyResponse();
+
+        const dates = days.map(d => d._id);
+        const totalPoints = days.reduce((s, d) => s + d.count, 0);
+        const daily = {}, overall = {};
+
+        numericKeys.forEach(k => {
+          daily[k] = {
+            min:  days.map(d => +(d[`${k}_min`]  ?? 0).toFixed(3)),
+            max:  days.map(d => +(d[`${k}_max`]  ?? 0).toFixed(3)),
+            avg:  days.map(d => +(d[`${k}_avg`]  ?? 0).toFixed(3)),
+            last: days.map(d => +(d[`${k}_last`] ?? 0).toFixed(3))
+          };
+          const mins = days.map(d => d[`${k}_min`]).filter(v => typeof v === 'number');
+          const maxs = days.map(d => d[`${k}_max`]).filter(v => typeof v === 'number');
+          const weighted = days.filter(d => typeof d[`${k}_avg`] === 'number');
+          overall[k] = {
+            min: mins.length ? +Math.min(...mins).toFixed(3) : 0,
+            max: maxs.length ? +Math.max(...maxs).toFixed(3) : 0,
+            avg: weighted.length
+              ? +(weighted.reduce((s,d) => s + d[`${k}_avg`]*d.count, 0) / weighted.reduce((s,d) => s + d.count, 0)).toFixed(3)
+              : 0,
+            last: daily[k].last[daily[k].last.length - 1] ?? 0
+          };
+        });
+
+        return res.json({ isRange: true, pointCount: totalPoints, dates, daily, overall });
       }
 
-      const docs = await db.collection('history')
-        .find(query, { projection: { _id: 0 } })
-        .sort({ date: 1, timestamps: 1 })
-        .toArray();
-
-      if (!docs.length) return emptyResponse();
-
-      const result = { pointCount: docs.length };
-      wantedKeys.forEach(k => { result[k] = []; });
-      docs.forEach(doc => {
-        wantedKeys.forEach(k => {
-          result[k].push(doc[k] !== undefined ? doc[k] : 0);
-        });
-      });
-
-      return res.json(result);
-
+      return res.status(400).json({ error: 'Provide ?date=YYYY-MM-DD or ?from=...&to=...' });
     } catch (e) {
       console.error('[MongoDB] /api/history error:', e.message);
     }
   }
 
+  // in-memory fallback unchanged...
   let record;
-  if (date) {
-    record = dateStore[date];
-    if (!record) return emptyResponse();
-  } else if (from && to) {
+  if (date) { record = dateStore[date]; if (!record) return emptyResponse(); }
+  else if (from && to) {
     if (from > to) return res.status(400).json({ error: 'from must be <= to' });
     record = mergeDateRange(from, to);
     if (record.timestamps.length === 0) return emptyResponse();
-  } else {
-    return res.status(400).json({ error: 'Provide ?date=YYYY-MM-DD or ?from=...&to=...' });
-  }
+  } else return res.status(400).json({ error: 'Provide ?date=YYYY-MM-DD or ?from=...&to=...' });
 
   const result = { pointCount: record.timestamps.length };
   wantedKeys.forEach(k => { result[k] = record[k] || []; });
@@ -1026,7 +1392,8 @@ function buildBroadcast() {
         ? +(crankTracker.lastCrankMs / 1000).toFixed(1) : null,
       transferLog: amfStateTracker.transferLog,
       crankLog:    crankTracker.crankLog,
-      gensetInfo
+      gensetInfo,
+      engineHoursToday: engineHoursTodayComputed   // ADD THIS
     }
   };
 }

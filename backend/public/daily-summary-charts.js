@@ -113,7 +113,7 @@
   }
 
   // ── Fetch 7-day summaries from /api/history ──────────────────
-  async function fetch7DaySummaries() {
+ async function fetch7DaySummaries() {
     const days   = [];
     const labels = [];
     const today  = new Date();
@@ -123,44 +123,32 @@
       d.setDate(d.getDate() - i);
       const key = d.toISOString().slice(0, 10);
       days.push(key);
-      labels.push(key.slice(5)); // MM-DD
+      labels.push(key.slice(5));
     }
 
-    // Fetch all 7 days in parallel
-    const results = await Promise.all(days.map(async (date) => {
-      // First check localStorage daily record (fast, already computed)
+    const cached = {};
+    const missing = [];
+    days.forEach(date => {
       try {
         const stored = localStorage.getItem('fuelDaily_' + date);
-        if (stored) {
-          const rec = JSON.parse(stored);
-          return { date, fromCache: true, ...rec };
-        }
-      } catch(e) {}
+        if (stored) cached[date] = { date, fromCache: true, ...JSON.parse(stored) };
+        else missing.push(date);
+      } catch(e) { missing.push(date); }
+    });
 
-      // Fallback: fetch from API
+    if (missing.length) {
       try {
-        const r = await fetch('/api/history?date=' + date);
-        if (!r.ok) return { date, consumedL: 0, engHours: 0, peakKw: 0, avgKw: 0 };
-        const json = await r.json();
-        if (!json || json.noData || !json.timestamps) {
-          return { date, consumedL: 0, engHours: 0, peakKw: 0, avgKw: 0 };
+      const r = await fetch(`/api/history?date=${dateStr}&keys=timestamps,voltL1N,voltL2N,voltL3N,currL1,currL2,currL3,kwTotal,kvaTotal,frequency,pf,engineRPM,coolantTempF,oilPressPsi,battV,fuelLevelPct`);
+      if (r.ok) {
+          const json = await r.json();
+          (json.days || []).forEach(d => { cached[d.date] = d; });
         }
-        const agg = aggregateDay(json);
-        return agg
-          ? { date, consumedL: agg.fuelConsumed, engHours: agg.engHToday,
-              peakKw: agg.peakKw, avgKw: agg.avgKw,
-              peakKva: agg.peakKva, avgPf: agg.avgPf,
-              peakRpm: agg.peakRpm, maxCoolantF: agg.maxCoolantF,
-              minOilPsi: agg.minOilPsi, maxOilPsi: agg.maxOilPsi,
-              avgBattV: agg.avgBattV, avgVoltUnbal: agg.avgVoltUnbal }
-          : { date, consumedL: 0, engHours: 0, peakKw: 0, avgKw: 0 };
-      } catch(e) {
-        return { date, consumedL: 0, engHours: 0, peakKw: 0, avgKw: 0 };
-      }
-    }));
+      } catch(e) { console.warn('[DailyCharts] rollup fetch failed:', e.message); }
+    }
 
+    const results = days.map(date => cached[date] || { date, consumedL: 0, engHours: 0, peakKw: 0, avgKw: 0 });
     return { labels, days, results };
-  }
+}
 
   // ── Build chart panel HTML ───────────────────────────────────
   function chartPanel(id, title, height) {
