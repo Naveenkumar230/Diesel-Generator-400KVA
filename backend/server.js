@@ -61,10 +61,12 @@ db.collection('fuel_events').createIndex({ date: 1, category: 1 });
 db.collection('history').createIndex({ date: 1, timestamps: 1 });
 db.collection('engine_events').createIndex({ date: 1, timestamp: 1 }); // ADD THIS
 
-loadRefillCache();
+setupRefillCollections().then(loadRefillCache).then(loadFuelRuns);
+loadRefillDetectorState();
 loadGensetSettings();
 loadRuntimeState();
-loadEngineHoursBaseline();   // ADD THIS
+loadEngineHoursBaseline();
+loadDeviceStatus();
 
   } catch (e) {
     console.error('[MongoDB] Connection failed:', e.message);
@@ -169,6 +171,492 @@ async function loadGensetSettings() {
     if (doc) gensetSettings = { ...gensetSettings, ...doc };
   } catch (e) { console.error('[Settings] load error:', e.message); }
 }
+
+//  Needs a new Render env var:  NOREFILL_PASSWORD
+// ════════════════════════════════════════════════════════════════
+const crypto = require('crypto');
+const { ObjectId } = require('mongodb');
+app.set('trust proxy', 1);   // Render sits behind a proxy (needed for per-IP rate limit)
+
+// ── Settings: prediction thresholds + detection rules (separate!) ──
+const REFILL_DEFAULTS = {
+  refillPredictLowL:  25,   // prediction range (does NOT gate detection/confirmation)
+  refillPredictHighL: 70,
+  refillMinRiseL:     70,   // detection: minimum sustained rise to raise a candidate
+  refillSettleSec:    90,   // detection: level must stop rising this long
+  refillNoiseBandL:   10,   // detection: rises smaller than this are sensor noise
+  tankCapacityL:      785
+};
+
+const REFILL_MIN_RISE_L = 100;
+
+function rs(k) {
+  const v = Number(gensetSettings[k]);
+  return Number.isFinite(v) && v > 0 ? v : REFILL_DEFAULTS[k];
+}
+const tankL    = () => rs('tankCapacityL');
+const pctOf    = L  => Math.round(L / tankL() * 100);
+const dayKeyOf = t  => new Date(t).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+function getRefillSettings() {
+  const o = {}; Object.keys(REFILL_DEFAULTS).forEach(k => { o[k] = rs(k); }); return o;
+}
+function safeEq(a, b) {
+  if (!b) return false;
+  const h = s => crypto.createHash('sha256').update(String(s == null ? '' : s)).digest();
+  return crypto.timingSafeEqual(h(a), h(b));
+}
+
+// ── Mappers ─────────────────────────────────────────────────────
+function mapRefill(d) {
+  return {
+    id: String(d._id || d.id), time: d.time,
+    beforeL: d.beforeL, afterL: d.afterL, addedL: d.addedL,
+    beforePct: d.beforePct, afterPct: d.afterPct,
+    person: d.person || 'Auto-detected', auto: d.auto !== false,
+    status: d.status || 'confirmed', legacy: !!d.legacy,
+    confirmedAt: d.confirmedAt || null, candidateId: d.candidateId || null,
+    dgStatus: d.dgStatus || null
+  };
+}
+function mapCandidate(d) {
+  return {
+    id: String(d._id), detectedAt: d.detectedAt,
+    beforeL: d.beforeL, afterL: d.afterL, increaseL: d.increaseL,
+    beforePct: d.beforePct, afterPct: d.afterPct,
+    dgStatus: d.dgStatus || null, status: d.status, resolvedAt: d.resolvedAt || null
+  };
+}
+
+// ── REPLACE your loadRefillCache() with this one ────────────────
+async function loadRefillCache() {
+  if (!db) return;
+  try {
+    const docs = await db.collection('refills').find({}).sort({ time: -1 }).limit(500).toArray();
+    refillCache = docs.map(mapRefill);
+    console.log(`[Refill] Loaded ${refillCache.length} confirmed records`);
+  } catch (e) { console.error('[Refill] loadRefillCache error:', e.message); }
+}
+
+// ── Startup: indexes + legacy migration ─────────────────────────
+// In connectMongo(), REPLACE the line  loadRefillCache();  with:
+//     setupRefillCollections().then(loadRefillCache); loadRefillDetectorState();
+async function setupRefillCollections() {
+  try {
+    const cands = db.collection('refill_candidates');
+    const refs  = db.collection('refills');
+    await cands.createIndex({ status: 1, detectedAt: -1 });
+    await cands.createIndex({ fingerprint: 1 }, { unique: true });
+    await refs.createIndex({ time: 1 });
+    // exactly-once guarantee: one confirmed refill per candidate
+    await refs.createIndex({ candidateId: 1 },
+      { unique: true, partialFilterExpression: { candidateId: { $type: 'string' } } });
+    // Old auto-saved refills (before manual confirmation existed): keep, flag as legacy
+    const r = await refs.updateMany({ status: { $exists: false } },
+      { $set: { status: 'confirmed', legacy: true, confirmedAt: null, confirmedBy: 'legacy-auto' } });
+    if (r.modifiedCount) console.log(`[Refill] Migrated ${r.modifiedCount} legacy refills (kept as confirmed)`);
+  } catch (e) { console.error('[Refill] setup error:', e.message); }
+}
+
+// ── Detection state machine (automatic; NEVER confirms) ─────────
+let refillDetect = { baseL: null, rising: false, peakL: null, lastPeakMs: 0 };
+let _detectSaveMs = 0;
+
+async function loadRefillDetectorState() {
+  if (!db) return;
+  try {
+    const d = await db.collection('runtime').findOne({ _id: 'refillDetector' });
+    // A refill that happened while the server was down still shows up as a rise vs. this base
+    if (d && d.baseL > 0 && Date.now() - d.savedAt < 6 * 3600e3 && !refillDetect.rising) {
+      refillDetect.baseL = d.baseL;
+    }
+  } catch (e) { console.error('[Refill] detector load error:', e.message); }
+}
+function saveRefillDetectorState() {
+  if (!db || refillDetect.baseL == null) return;
+  _detectSaveMs = Date.now();
+  db.collection('runtime').updateOne({ _id: 'refillDetector' },
+    { $set: { baseL: refillDetect.baseL, savedAt: Date.now() } }, { upsert: true })
+    .catch(e => console.error('[Refill] detector save error:', e.message));
+}
+
+// Call on every reading (from appendHistory)
+function runRefillDetection(fuelL) {
+  if (!(fuelL > 0)) return;                          // missing/zero reading → ignore
+  const d = refillDetect, now = Date.now();
+const noise = rs('refillNoiseBandL'), minRise = REFILL_MIN_RISE_L, settleMs = rs('refillSettleSec') * 1000;
+  if (d.baseL === null) { d.baseL = fuelL; saveRefillDetectorState(); return; }
+
+  if (!d.rising) {
+    if (fuelL >= d.baseL + noise) { d.rising = true; d.peakL = fuelL; d.lastPeakMs = now; }
+    else if (fuelL < d.baseL)     { d.baseL = fuelL; }          // follow consumption downward
+    if (now - _detectSaveMs > 60000) saveRefillDetectorState();
+    return;
+  }
+
+  // rising: wait for the level to stop climbing (a refill takes minutes)
+  if (fuelL > d.peakL) { d.peakL = fuelL; d.lastPeakMs = now; }
+  if (now - d.lastPeakMs < settleMs) return;
+
+  const settledRise = fuelL - d.baseL;               // measured on the SETTLED level, so a spike that fell back is ignored
+  if (settledRise >= minRise) createRefillCandidate(d.baseL, fuelL);
+  d.baseL = fuelL; d.rising = false; d.peakL = null;
+  saveRefillDetectorState();
+}
+
+async function createRefillCandidate(beforeL, afterL) {
+  if (!db) { console.warn('[Refill] DB down — candidate not stored'); return; }
+  const at = new Date();
+  const doc = {
+    fingerprint: `${Math.round(beforeL)}:${Math.round(afterL)}:${Math.floor(at.getTime() / 600000)}`, // blocks duplicates (e.g. restart mid-refill)
+    detectedAt: at.toISOString(), date: todayKey(),
+    beforeL: Math.round(beforeL), afterL: Math.round(afterL),
+    increaseL: Math.round(afterL - beforeL),
+    beforePct: pctOf(beforeL), afterPct: pctOf(afterL),
+    dgStatus: (latestReading && latestReading.stateLabel) || null,
+    status: 'pending'
+  };
+  try {
+    const r = await db.collection('refill_candidates').insertOne(doc);
+    doc._id = r.insertedId;
+    console.log(`[Refill] Candidate +${doc.increaseL}L (${doc.beforeL}→${doc.afterL}) awaiting confirmation`);
+    io.emit('refill:candidate', mapCandidate(doc));
+  } catch (e) {
+    if (e.code !== 11000) console.error('[Refill] candidate insert error:', e.message);
+  }
+}
+
+// ── Candidates API ──────────────────────────────────────────────
+function parseIso(v) { const d = new Date(v); return isNaN(d) ? null : d.toISOString(); }
+
+app.get('/api/refill-candidates', async (req, res) => {
+  if (!db) return res.json([]);
+  const q = {};
+  if (req.query.status) q.status = String(req.query.status);
+  const from = req.query.from && parseIso(req.query.from), to = req.query.to && parseIso(req.query.to);
+  if ((req.query.from && !from) || (req.query.to && !to)) return res.status(400).json({ error: 'Invalid date' });
+  if (from || to) { q.detectedAt = {}; if (from) q.detectedAt.$gte = from; if (to) q.detectedAt.$lte = to; }
+  try {
+    const docs = await db.collection('refill_candidates').find(q).sort({ detectedAt: -1 }).limit(500).toArray();
+    res.json(docs.map(mapCandidate));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/refill-candidates/:id/confirm', async (req, res) => {
+  if (!db) return res.status(503).json({ ok: false, error: 'Database unavailable' });
+  const { id } = req.params;
+  if (!ObjectId.isValid(id)) return res.status(400).json({ ok: false, error: 'Bad id' });
+  const _id = new ObjectId(id);
+  const person = String((req.body && req.body.person) || '').trim().slice(0, 60) || 'Unknown';
+  const cands = db.collection('refill_candidates');
+
+  // atomic claim: only ONE request can move pending → confirming
+  const c = await cands.findOneAndUpdate({ _id, status: 'pending' },
+    { $set: { status: 'confirming', resolvedAt: new Date().toISOString() } }, { returnDocument: 'after' });
+  if (!c) {
+    const cur = await cands.findOne({ _id });
+    return res.status(cur ? 409 : 404).json({ ok: false, error: cur ? `Already ${cur.status}` : 'Not found', status: cur && cur.status });
+  }
+  const rec = {
+    time: c.detectedAt, beforeL: c.beforeL, afterL: c.afterL, addedL: c.increaseL,
+    beforePct: c.beforePct, afterPct: c.afterPct, person, auto: false,
+    status: 'confirmed', legacy: false, confirmedAt: new Date().toISOString(),
+    candidateId: id, dgStatus: c.dgStatus
+  };
+  try {
+    const r = await db.collection('refills').insertOne({ ...rec });
+    rec._id = r.insertedId;
+    await cands.updateOne({ _id }, { $set: { status: 'confirmed', refillId: String(r.insertedId) } });
+        const mapped = mapRefill(rec);
+    refillCache.unshift(mapped);
+    onRefillConfirmed(mapped);                         // ← NEW LINE
+    io.emit('refill:resolved', { id, status: 'confirmed', record: mapped });
+    io.emit('genset:update', buildBroadcast());
+    res.json({ ok: true, record: mapped });
+  } catch (e) {
+    if (e.code === 11000) {                            // refill already exists for this candidate
+      await cands.updateOne({ _id }, { $set: { status: 'confirmed' } });
+      return res.status(409).json({ ok: false, error: 'Already confirmed' });
+    }
+    await cands.updateOne({ _id, status: 'confirming' }, { $set: { status: 'pending' } });
+    console.error('[Refill] confirm error:', e.message);
+    res.status(500).json({ ok: false, error: 'Could not save refill' });
+  }
+});
+
+const _noRefillFails = {};   // ip → { n, resetAt }
+app.post('/api/refill-candidates/:id/reject', async (req, res) => {
+  if (!db) return res.status(503).json({ ok: false, error: 'Database unavailable' });
+  const { id } = req.params;
+  if (!ObjectId.isValid(id)) return res.status(400).json({ ok: false, error: 'Bad id' });
+  if (!process.env.NOREFILL_PASSWORD)
+    return res.status(503).json({ ok: false, error: 'No-Refill password is not configured on the server' });
+
+  const ip = req.ip, now = Date.now();
+  const b = _noRefillFails[ip] = (_noRefillFails[ip] && _noRefillFails[ip].resetAt > now) ? _noRefillFails[ip] : { n: 0, resetAt: now + 300000 };
+  if (b.n >= 5) return res.status(429).json({ ok: false, error: 'Too many wrong attempts. Try again in a few minutes.' });
+
+  if (!safeEq(req.body && req.body.password, process.env.NOREFILL_PASSWORD)) {
+    b.n++;
+    return res.status(401).json({ ok: false, error: 'Incorrect password' });
+  }
+  const _id = new ObjectId(id);
+  const c = await db.collection('refill_candidates').findOneAndUpdate({ _id, status: 'pending' },
+    { $set: { status: 'rejected', resolvedAt: new Date().toISOString() } }, { returnDocument: 'after' });
+  if (!c) {
+    const cur = await db.collection('refill_candidates').findOne({ _id });
+    return res.status(cur ? 409 : 404).json({ ok: false, error: cur ? `Already ${cur.status}` : 'Not found', status: cur && cur.status });
+  }
+  // No refill record, no baseline change.
+  io.emit('refill:resolved', { id, status: 'rejected' });
+  res.json({ ok: true });
+});
+
+// ── Confirmed refills: list (with date/time filter) + manual entry ──
+app.get('/api/refills', async (req, res) => {
+  const from = req.query.from && parseIso(req.query.from), to = req.query.to && parseIso(req.query.to);
+  if ((req.query.from && !from) || (req.query.to && !to)) return res.status(400).json({ error: 'Invalid date' });
+  if (from && to && from > to) return res.status(400).json({ error: 'from must be <= to' });
+  const inRange = r => (!from || r.time >= from) && (!to || r.time <= to);
+  if (!db) return res.json(refillCache.filter(inRange));
+  const q = {};
+  if (from || to) { q.time = {}; if (from) q.time.$gte = from; if (to) q.time.$lte = to; }
+  try {
+    const docs = await db.collection('refills').find(q).sort({ time: -1 }).limit(from || to ? 2000 : 200).toArray();
+    res.json(docs.map(mapRefill));
+  } catch (e) { console.error('[Refill] GET error:', e.message); res.json(refillCache.filter(inRange)); }
+});
+
+app.post('/api/refills', async (req, res) => {   // manual entry = user-initiated confirmation
+  const beforeL = Math.round(Number(req.body.beforeL)), afterL = Math.round(Number(req.body.afterL));
+  if (!(beforeL >= 0) || !(afterL > beforeL) || afterL > tankL() * 1.05)
+    return res.status(400).json({ error: 'Invalid levels: after must be greater than before and within tank capacity' });
+  const t = req.body.time ? parseIso(req.body.time) : new Date().toISOString();
+  if (!t) return res.status(400).json({ error: 'Invalid time' });
+
+  if (afterL - beforeL < REFILL_MIN_RISE_L)
+    return res.status(400).json({ error: `A refill must be at least ${REFILL_MIN_RISE_L} L` });
+  
+  const rec = {
+    time: t, beforeL, afterL, addedL: afterL - beforeL,
+    beforePct: pctOf(beforeL), afterPct: pctOf(afterL),
+    person: String(req.body.person || 'Manual entry').slice(0, 60), auto: false,
+    status: 'confirmed', legacy: false, manual: true, confirmedAt: new Date().toISOString(),
+    dgStatus: (latestReading && latestReading.stateLabel) || null
+  };
+  if (!db) return res.status(503).json({ error: 'Database unavailable' });
+  try {
+    const r = await db.collection('refills').insertOne({ ...rec });
+    rec._id = r.insertedId;
+        const mapped = mapRefill(rec);
+    refillCache.unshift(mapped);
+    onRefillConfirmed(mapped);                         // ← NEW LINE
+    io.emit('refill:resolved', { id: mapped.id, status: 'confirmed', record: mapped });
+    io.emit('genset:update', buildBroadcast());
+    res.json({ ok: true, record: mapped });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Refill settings (password = SETTINGS_PASSWORD, sent in a header) ──
+app.get('/api/refill-settings', (req, res) => res.json(getRefillSettings()));
+app.post('/api/refill-settings', async (req, res) => {
+  if (!process.env.SETTINGS_PASSWORD) return res.status(503).json({ ok: false, error: 'SETTINGS_PASSWORD not configured' });
+  if (!safeEq(req.get('x-settings-password'), process.env.SETTINGS_PASSWORD))
+    return res.status(401).json({ ok: false, error: 'Incorrect settings password' });
+
+  const b = req.body || {}, out = {};
+  for (const k of Object.keys(REFILL_DEFAULTS)) {
+    const v = b[k] === undefined ? rs(k) : Number(b[k]);
+    if (!Number.isFinite(v) || v <= 0) return res.status(400).json({ ok: false, error: `${k} must be a positive number` });
+    out[k] = v;
+  }
+  if (out.refillPredictLowL >= out.refillPredictHighL) return res.status(400).json({ ok: false, error: 'Lower prediction threshold must be less than the upper one' });
+  if (out.refillNoiseBandL >= out.refillMinRiseL)      return res.status(400).json({ ok: false, error: 'Noise band must be smaller than the minimum rise' });
+  if (out.refillSettleSec < 20 || out.refillSettleSec > 900) return res.status(400).json({ ok: false, error: 'Settle time must be 20–900 seconds' });
+  if (out.tankCapacityL < 100 || out.tankCapacityL > 5000)   return res.status(400).json({ ok: false, error: 'Tank capacity must be 100–5000 L' });
+
+  gensetSettings = { ...gensetSettings, ...out };
+  try {
+    if (db) await db.collection('settings').updateOne({ _id: 'config' }, { $set: out }, { upsert: true });
+    res.json({ ok: true, settings: getRefillSettings() });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// ── Fuel consumption: refill-aware ──────────────────────────────
+function currentFuelL() {
+  const f = (latestReading && latestReading.fuel) || {};
+  const l = parseFloat(f.litres);
+  if (l > 0) return Math.round(l);
+  const p = parseFloat(f.pct) || 0;
+  return p > 0 ? Math.round(p * tankL() / 100) : null;
+}
+
+// ════════════════════════════════════════════════════════════════
+//  STABLE FUEL STOCK + RUN-BASED CONSUMPTION
+//  Paste into server.js right AFTER the refill block you already added.
+//  DELETE the old  function computeFuelConsumption() { ... }  (this replaces it).
+//  KEEP  app.get('/api/fuel/consumption', ...)  as it is.
+//
+//  Rules:
+//   • Consumption is counted ONLY while the DG runs (RPM > 100).
+//   • DG stopped  → consumption is frozen; sensor wobble is ignored.
+//   • Each run is measured as:  stable level BEFORE start − stable level AFTER stop
+//     (+ any CONFIRMED refill inside the run).  Medians remove the ±5–10 L noise.
+//   • Displayed stock is a smoothed median with a dead-band, so 600/601/605 → one value.
+// ════════════════════════════════════════════════════════════════
+const FUEL_FILTER = {
+  smoothSec:     180,   // live stock = median of the last 3 min
+  anchorSec:     120,   // run start level = median of the 2 min before the engine started
+  stopSettleSec: 120,   // wait this long after stop before measuring the end level
+  endWindowSec:   90,   // end level = median of the last 90 s of that wait
+  deadbandL:       5,   // displayed stock moves only when the smoothed value changes ≥ 5 L
+  runRpm:        100    // engine counts as running above this RPM
+};
+
+let fuelBuf       = [];                 // [{t, L}] raw litres, last 20 min (raw data in MongoDB history is untouched)
+let stockShownL   = null;               // stable stock shown on the dashboard
+let runSess       = null;               // the run in progress (or just stopped, waiting to settle)
+let consLedger    = { dateKey: null, doneL: 0, sinceDoneL: 0, runSecDone: 0 };
+let _runSaveMs    = 0;
+
+const medianOf = a => {
+  if (!a.length) return null;
+  const s = [...a].sort((x, y) => x - y), m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+};
+const bufMedian = (fromMs, toMs) => medianOf(fuelBuf.filter(e => e.t >= fromMs && e.t < toMs).map(e => e.L));
+
+function ledgerRoll() {
+  const dk = todayKey();
+  if (consLedger.dateKey !== dk) { consLedger.dateKey = dk; consLedger.doneL = 0; consLedger.runSecDone = 0; }
+}
+
+// ── Call on every reading (from appendHistory) ──────────────────
+function updateFuelTracking(fuelL, rpm) {
+  if (!(fuelL > 0)) return;
+  const now = Date.now();
+  fuelBuf.push({ t: now, L: fuelL });
+  const cut = now - 20 * 60000;
+  while (fuelBuf.length && fuelBuf[0].t < cut) fuelBuf.shift();
+
+  const sm = bufMedian(now - FUEL_FILTER.smoothSec * 1000, Infinity);
+  if (stockShownL === null || Math.abs(sm - stockShownL) >= FUEL_FILTER.deadbandL) stockShownL = Math.round(sm);
+
+  const running = (Number(rpm) || 0) > FUEL_FILTER.runRpm;
+
+  if (running) {
+    if (!runSess) {
+      const pre = bufMedian(now - FUEL_FILTER.anchorSec * 1000, now);   // readings BEFORE this one
+      const startL = pre != null ? pre : sm;
+      runSess = { startTs: now, startL, refilledL: 0, sinceBaseL: startL, liveCons: 0, liveSince: 0, stopTs: null };
+      console.log(`[FuelRun] Started — start level ${Math.round(startL)} L`);
+    }
+    runSess.stopTs = null;                                              // restarted before settling → same run
+    // live figure never flickers downwards while running; the exact value is fixed when the run ends
+    runSess.liveCons  = Math.max(runSess.liveCons,  Math.max(0, runSess.startL + runSess.refilledL - sm));
+    runSess.liveSince = Math.max(runSess.liveSince, Math.max(0, runSess.sinceBaseL - sm));
+    if (db && now - _runSaveMs > 30000) saveRunSess();
+  } else if (runSess) {
+    if (!runSess.stopTs) runSess.stopTs = now;
+    if (now - runSess.stopTs >= FUEL_FILTER.stopSettleSec * 1000) finalizeRun(now);
+  }
+}
+
+function saveRunSess() {
+  _runSaveMs = Date.now();
+  db.collection('runtime').updateOne({ _id: 'fuelRun' },
+    { $set: { sess: runSess, savedAt: Date.now() } }, { upsert: true })
+    .catch(e => console.error('[FuelRun] save error:', e.message));
+}
+
+function finalizeRun(now) {
+  const s = runSess; runSess = null;
+  const endMed = bufMedian(now - FUEL_FILTER.endWindowSec * 1000, Infinity);
+  const endL = endMed != null ? endMed : (stockShownL || s.startL);
+  const consumedL = Math.max(0, Math.round(s.startL + s.refilledL - endL));
+  const sinceL    = Math.max(0, Math.round(s.sinceBaseL - endL));
+  ledgerRoll();
+  consLedger.doneL      += consumedL;
+  consLedger.sinceDoneL += sinceL;
+    consLedger.runSecDone += Math.round((s.stopTs - s.startTs) / 1000);
+  console.log(`[FuelRun] Finished — ${Math.round(s.startL)} → ${Math.round(endL)} L, consumed ${consumedL} L (refilled in run: ${s.refilledL} L)`);
+  if (db) {
+    db.collection('fuel_runs').insertOne({
+      date: dayKeyOf(new Date(s.stopTs)), startTs: new Date(s.startTs).toISOString(), endTs: new Date(s.stopTs).toISOString(),
+      startL: Math.round(s.startL), endL: Math.round(endL), refilledL: s.refilledL,
+      consumedL, sinceRefillL: sinceL, durationSec: Math.round((s.stopTs - s.startTs) / 1000), final: true
+    }).catch(e => console.error('[FuelRun] insert error:', e.message));
+    db.collection('runtime').updateOne({ _id: 'fuelRun' }, { $set: { sess: null, savedAt: Date.now() } }, { upsert: true }).catch(() => {});
+  }
+}
+
+// ── Call when a refill is CONFIRMED (confirm route + manual route) ──
+function onRefillConfirmed(r) {
+  consLedger.sinceDoneL = 0;                       // "since last refill" restarts
+  if (runSess) { runSess.refilledL += (r.addedL || 0); runSess.sinceBaseL = r.afterL; runSess.liveSince = 0; }
+  stockShownL = r.afterL;                          // stock jumps straight to the confirmed level
+  fuelBuf = [];                                    // old pre-refill readings must not drag the median
+}
+
+// ── Startup: restore today's finished runs + any run in progress ──
+async function loadFuelRuns() {
+  if (!db) return;
+  try {
+    await db.collection('fuel_runs').createIndex({ date: 1 });
+    await db.collection('fuel_runs').createIndex({ endTs: 1 });
+    const dk = todayKey();
+    const today = await db.collection('fuel_runs').find({ date: dk }).toArray();
+    consLedger.dateKey = dk;
+    consLedger.doneL = today.reduce((s, r) => s + (r.consumedL || 0), 0);
+        consLedger.runSecDone = today.reduce((s, r) => s + (r.durationSec || 0), 0);
+    const last = [...refillCache].sort((a, b) => String(b.time).localeCompare(String(a.time)))[0];
+    const since = await db.collection('fuel_runs').find(last ? { endTs: { $gt: last.time } } : { date: dk }).toArray();
+    consLedger.sinceDoneL = since.reduce((s, r) => s + (r.sinceRefillL || 0), 0);
+    const d = await db.collection('runtime').findOne({ _id: 'fuelRun' });
+    if (d && d.sess && Date.now() - d.savedAt < 12 * 3600e3 && !runSess) {
+      runSess = d.sess;
+      console.log('[FuelRun] Restored run in progress after restart');
+    }
+  } catch (e) { console.error('[FuelRun] load error:', e.message); }
+}
+
+function computeFuelConsumption() {
+  const out = {
+    available: false, stockL: stockShownL, currentL: stockShownL,
+    startL: (fuelSession.dateKey === todayKey() && fuelSession.startL != null) ? Math.round(fuelSession.startL) : null,
+    refillsTodayL: 0, todayConsumedL: null, runningNow: !!(runSess && !runSess.stopTs),
+    sinceRefill: null, estimated: false
+  };
+  if (stockShownL == null) return out;
+
+  ledgerRoll();
+  const dk = todayKey();
+  out.refillsTodayL = refillCache.filter(r => dayKeyOf(r.time) === dk).reduce((s, r) => s + (r.addedL || 0), 0);
+  let today = consLedger.doneL + (runSess ? runSess.liveCons : 0);
+
+  // Did the engine run today in a way this server did not watch live?
+  const observedSec = consLedger.runSecDone + (runSess ? ((runSess.stopTs || Date.now()) - runSess.startTs) / 1000 : 0);
+  const missedSec   = (engineHoursTodayComputed || 0) * 3600 - observedSec;
+  let balance = null;
+  if (missedSec > 400 && out.startL != null) {          // 400 s > the hour counter's 0.1 h resolution
+    balance = Math.max(0, out.startL + out.refillsTodayL - stockShownL);
+    if (balance > today) { today = balance; out.estimated = true; }
+  }
+  out.todayConsumedL = Math.round(today);
+  out.available = true;
+
+  const last = [...refillCache].sort((a, b) => String(b.time).localeCompare(String(a.time)))[0];
+  if (last) {
+    let since = consLedger.sinceDoneL + (runSess ? runSess.liveSince : 0);
+    if (out.estimated) since = Math.max(since, Math.max(0, last.afterL - stockShownL));
+    out.sinceRefill = { baselineL: last.afterL, refillTime: last.time, source: 'refill', consumedL: Math.round(since) };
+  } else {
+    out.sinceRefill = { baselineL: out.startL, refillTime: null, source: 'day-start', consumedL: out.todayConsumedL };
+  }
+  return out;
+}
+
+
+app.get('/api/fuel/consumption', (req, res) => res.json(computeFuelConsumption()));
 
 app.post('/api/settings/verify', (req, res) => {
   const { password } = req.body;
@@ -285,7 +773,7 @@ function isEngineRunning(row) {
 // Called from appendHistory() on every reading, AFTER detectRefill()
 // so a real refill jump never gets double-classified as "noise recovery".
 function classifyFuelEvent(row, dk, ts) {
-  const fuelL = row.fuelLevelL > 0 ? row.fuelLevelL : Math.round(row.fuelLevelPct * 780 / 100);
+const fuelL = row.fuelLevelL > 0 ? row.fuelLevelL : Math.round(row.fuelLevelPct * tankL() / 100);
 
   if (fuelClassifyTracker.prevFuelL === null) {
     fuelClassifyTracker.prevFuelL = fuelL;
@@ -349,8 +837,20 @@ async function loadRuntimeState() {
       engineHoursToday = { dateKey: doc.dateKey, seconds: doc.engineSeconds || 0, lastTs: null };
       fuelSession      = { dateKey: doc.dateKey, startL: doc.fuelStartL, startPct: doc.fuelStartPct };
       console.log(`[Runtime] Restored today's state: ${(engineHoursToday.seconds/3600).toFixed(2)}h, fuel start ${fuelSession.startL}L`);
+    } else {
+      // No saved baseline for today: use the first fuel reading stored today
+      const first = await db.collection('history')
+        .find({ date: dk, fuelLevelL: { $gt: 0 } })
+        .sort({ timestamps: 1 }).limit(1).toArray();
+      if (first.length) {
+        fuelSession = { dateKey: dk, startL: first[0].fuelLevelL, startPct: first[0].fuelLevelPct };
+      }
     }
-  } catch (e) { console.error('[Runtime] load error:', e.message); }
+  } catch (e) {
+    console.error('[Runtime] load error:', e.message);
+  } finally {
+    runtimeStateLoaded = true;
+  }
 }
 
 async function loadEngineHoursBaseline() {
@@ -421,10 +921,14 @@ function updateEngineHoursTodayServer(isRunning) {
   return engineHoursToday.seconds / 3600;
 }
 
+let runtimeStateLoaded = false;
+
 function updateFuelSessionServer(fuelL, fuelPct) {
+  if ((db && !runtimeStateLoaded) || !(fuelL > 0)) return;
   const nowKey = todayKey();
   if (fuelSession.dateKey !== nowKey || fuelSession.startL == null) {
     fuelSession = { dateKey: nowKey, startL: fuelL, startPct: fuelPct };
+    saveRuntimeState();
   }
 }
 
@@ -457,81 +961,6 @@ async function loadRefillCache() {
   }
 }
 
-// ── Called from appendHistory() on every reading ─────────────
-function detectRefill(fuelL, fuelPct, timestamp) {
-  if (refillTracker.prevFuelL === null) {
-    refillTracker.prevFuelL   = fuelL;
-    refillTracker.prevFuelPct = fuelPct;
-    return;
-  }
-
-  const delta = fuelL - refillTracker.prevFuelL;
-
-  if (delta >= REFILL_THRESHOLD_L) {
-    const record = {
-      time:      new Date().toISOString(),
-      beforeL:   Math.round(refillTracker.prevFuelL),
-      afterL:    Math.round(fuelL),
-      addedL:    Math.round(delta),
-      beforePct: Math.round(refillTracker.prevFuelPct),
-      afterPct:  Math.round(fuelPct),
-      person:    'Auto-detected',
-      auto:      true
-    };
-
-    // Save to MongoDB
-    if (db) {
-      db.collection('refills')
-        .insertOne({ ...record })
-        .then(result => {
-          record.id = result.insertedId.toString();
-          refillCache.unshift(record);
-          if (refillCache.length > 100) refillCache.pop();
-          console.log(`[Refill] ✅ Detected! +${record.addedL}L (${record.beforeL}L → ${record.afterL}L)`);
-          // Broadcast to all connected clients
-          io.emit('refill:detected', record);
-        })
-        .catch(e => console.error('[Refill] insertOne error:', e.message));
-    } else {
-      // No MongoDB — keep in memory only
-      record.id = Date.now().toString();
-      refillCache.unshift(record);
-      if (refillCache.length > 100) refillCache.pop();
-      io.emit('refill:detected', record);
-    }
-  }
-
-  refillTracker.prevFuelL   = fuelL;
-  refillTracker.prevFuelPct = fuelPct;
-}
-
-// GET — fetch all refill records
-app.get('/api/refills', async (req, res) => {
-  if (db) {
-    try {
-      const docs = await db.collection('refills')
-        .find({})
-        .sort({ time: -1 })
-        .limit(100)
-        .toArray();
-      return res.json(docs.map(d => ({
-        id:        d._id.toString(),
-        time:      d.time,
-        beforeL:   d.beforeL,
-        afterL:    d.afterL,
-        addedL:    d.addedL,
-        beforePct: d.beforePct,
-        afterPct:  d.afterPct,
-        person:    d.person || 'Auto-detected',
-        auto:      d.auto !== false
-      })));
-    } catch(e) {
-      console.error('[Refill] GET error:', e.message);
-      return res.json(refillCache);
-    }
-  }
-  res.json(refillCache);
-});
 
 // PATCH — update person name for a refill record
 app.patch('/api/refills/:id', async (req, res) => {
@@ -557,57 +986,6 @@ app.patch('/api/refills/:id', async (req, res) => {
     }
   }
   res.json({ ok: true });
-});
-
-// DELETE — wipe all refill history records
-app.delete('/api/refills', async (req, res) => {
-  try {
-    refillCache = [];
-    refillTracker.prevFuelL   = null;
-    refillTracker.prevFuelPct = null;
-    if (db) {
-      const result = await db.collection('refills').deleteMany({});
-      return res.json({ ok: true, deletedCount: result.deletedCount });
-    }
-    res.json({ ok: true, deletedCount: 0, note: 'DB not connected, memory cache cleared only' });
-  } catch (e) {
-    console.error('[Refill] DELETE error:', e.message);
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-
-// POST — manual refill record (from UI manual entry)
-app.post('/api/refills', async (req, res) => {
-  const { beforeL, afterL, person, time } = req.body;
-  if (!beforeL || !afterL) return res.status(400).json({ error: 'beforeL and afterL required' });
-
-  const record = {
-    time:      time || new Date().toISOString(),
-    beforeL:   Math.round(beforeL),
-    afterL:    Math.round(afterL),
-    addedL:    Math.round(afterL - beforeL),
-    beforePct: Math.round(beforeL / 780 * 100),
-    afterPct:  Math.round(afterL  / 780 * 100),
-    person:    person || 'Manual entry',
-    auto:      false
-  };
-
-  if (db) {
-    try {
-      const result = await db.collection('refills').insertOne({ ...record });
-      record.id = result.insertedId.toString();
-      refillCache.unshift(record);
-      io.emit('refill:detected', record);
-      return res.json({ ok: true, record });
-    } catch(e) {
-      return res.status(500).json({ error: e.message });
-    }
-  }
-  record.id = Date.now().toString();
-  refillCache.unshift(record);
-  io.emit('refill:detected', record);
-  res.json({ ok: true, record });
 });
 
 // GET — fast fuel session baseline (start-of-day litres/pct)
@@ -801,10 +1179,115 @@ function checkAlertThresholds(row, payload) {
   }
 }
 
+// ════════════════════════════════════════════════════════════════
+//  DEVICE OFFLINE / BACK-ONLINE EMAIL ALERT
+// ════════════════════════════════════════════════════════════════
+const DEVICE_OFFLINE_AFTER_MS = 3 * 60 * 1000;   // no data for 3 min → offline
+const DEVICE_CHECK_EVERY_MS   = 30 * 1000;       // watchdog interval
+
+let deviceWatch = { lastSeenMs: null, offlineAlerted: false, offlineSinceMs: null };
+const _watchStartMs = Date.now();
+let _mqttDownMs = 0;
+
+const fmtIST = ms => new Date(ms).toLocaleString('en-IN', {
+  timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric',
+  hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+});
+function fmtDur(ms) {
+  const m = Math.max(1, Math.round(ms / 60000));
+  if (m < 60) return `${m} min`;
+  return `${Math.floor(m / 60)} h ${m % 60} min`;
+}
+
+function saveDeviceWatch() {
+  if (!db) return;
+  db.collection('runtime').updateOne({ _id: 'deviceStatus' },
+    { $set: { offlineAlerted: deviceWatch.offlineAlerted, offlineSinceMs: deviceWatch.offlineSinceMs, lastSeenMs: deviceWatch.lastSeenMs } },
+    { upsert: true }).catch(e => console.error('[DeviceWatch] save error:', e.message));
+}
+
+async function loadDeviceStatus() {
+  if (!db) return;
+  try {
+    const d = await db.collection('runtime').findOne({ _id: 'deviceStatus' });
+    if (d) {
+      deviceWatch.offlineAlerted = !!d.offlineAlerted;
+      deviceWatch.offlineSinceMs = d.offlineSinceMs || null;
+      deviceWatch.lastSeenMs     = d.lastSeenMs || null;
+      if (deviceWatch.offlineAlerted) console.log('[DeviceWatch] Restored: device was already marked offline');
+    }
+  } catch (e) { console.error('[DeviceWatch] load error:', e.message); }
+}
+
+function sendDeviceEmail(kind, durationMs) {
+  const to = gensetSettings.alertEmails;
+  if (!to) { console.warn('[DeviceWatch] No alert recipients configured — email skipped'); return; }
+
+  const off   = kind === 'offline';
+  const color = off ? '#DC2626' : '#059669';
+  const subject = off ? '🔴 DG monitor OFFLINE — no data received' : '🟢 DG monitor is back ONLINE';
+  const lastSeen = deviceWatch.lastSeenMs ? fmtIST(deviceWatch.lastSeenMs) : 'Not seen since server started';
+
+  const rows = off
+    ? `<tr><td style="padding:6px 0;color:#6B7280">Last data received</td><td style="padding:6px 0;font-weight:700">${lastSeen}</td></tr>
+       <tr><td style="padding:6px 0;color:#6B7280">Offline for</td><td style="padding:6px 0;font-weight:700">${fmtDur(durationMs)}</td></tr>
+       <tr><td style="padding:6px 0;color:#6B7280">Alert time</td><td style="padding:6px 0;font-weight:700">${fmtIST(Date.now())}</td></tr>`
+    : `<tr><td style="padding:6px 0;color:#6B7280">Back online at</td><td style="padding:6px 0;font-weight:700">${fmtIST(Date.now())}</td></tr>
+       <tr><td style="padding:6px 0;color:#6B7280">Was offline for</td><td style="padding:6px 0;font-weight:700">${fmtDur(durationMs)}</td></tr>`;
+
+  const tips = off
+    ? `<p style="margin:14px 0 0;font-size:13px;color:#4A5568;line-height:1.6">Please check: ESP32 power, site Wi-Fi / internet, and the RS485 link to the controller. Readings are not being recorded until it reconnects.</p>`
+    : `<p style="margin:14px 0 0;font-size:13px;color:#4A5568">Live readings have resumed.</p>`;
+
+  const html = `
+    <div style="font-family:Segoe UI,Arial,sans-serif;max-width:520px;margin:auto;border:1px solid #E2E8F5;border-radius:12px;overflow:hidden">
+      <div style="background:${color};color:#fff;padding:16px 20px;font-size:18px;font-weight:800">${subject}</div>
+      <div style="padding:18px 20px">
+        <div style="font-size:14px;color:#1A2340;font-weight:700">GenSight · Cummins 400 kVA · Bannerughatta</div>
+        <table style="width:100%;border-collapse:collapse;font-size:14px;margin-top:10px">${rows}</table>
+        ${tips}
+      </div>
+    </div>`;
+
+  Promise.resolve(sendEmail({ to, subject, html }))
+    .then(() => console.log(`[DeviceWatch] ${kind} email sent`))
+    .catch(e => console.error('[DeviceWatch] email error:', e.message));
+}
+
+// Called on every reading (from appendHistory)
+function markDeviceSeen() {
+  const now = Date.now();
+  deviceWatch.lastSeenMs = now;
+  if (deviceWatch.offlineAlerted) {
+    const downMs = now - (deviceWatch.offlineSinceMs || now);
+    deviceWatch.offlineAlerted = false;
+    deviceWatch.offlineSinceMs = null;
+    saveDeviceWatch();
+    sendDeviceEmail('online', downMs);
+  }
+}
+
+setInterval(() => {
+  const now = Date.now();
+  if (!mqttClient.connected) { _mqttDownMs = now; return; }   // our own broker link is down — not the device's fault
+  if (deviceWatch.offlineAlerted) return;                      // already told you
+
+  const ref = Math.max(deviceWatch.lastSeenMs || 0, _watchStartMs, _mqttDownMs);
+  if (now - ref < DEVICE_OFFLINE_AFTER_MS) return;
+
+  deviceWatch.offlineAlerted = true;
+  deviceWatch.offlineSinceMs = deviceWatch.lastSeenMs || _watchStartMs;
+  saveDeviceWatch();
+  console.warn('[DeviceWatch] Device OFFLINE — no data received');
+  sendDeviceEmail('offline', now - deviceWatch.offlineSinceMs);
+}, DEVICE_CHECK_EVERY_MS);
+
+
 const liveHistory = {};
 HISTORY_KEYS.forEach(k => { liveHistory[k] = []; });
 
 function appendHistory(payload) {
+  markDeviceSeen();
 // in appendHistory():
 const ts = new Date().toLocaleTimeString('en-IN', { hour12: false, timeZone: 'Asia/Kolkata' });
   const ac   = payload.ac         || {};
@@ -959,12 +1442,14 @@ const ts = new Date().toLocaleTimeString('en-IN', { hour12: false, timeZone: 'As
     payload._alert_spn = `ECM sent unrecognized SPN/FMI code - check engine diagnostics`;
   }
 
-  // ── Refill detection ──────────────────────────────────────
   const _fuelL = row.fuelLevelL > 0
     ? row.fuelLevelL
-    : Math.round(row.fuelLevelPct * 780 / 100);
-  detectRefill(_fuelL, row.fuelLevelPct, ts);
-    classifyFuelEvent(row, dk, ts);   // ← add this line
+    : Math.round(row.fuelLevelPct * tankL() / 100);
+  runRefillDetection(_fuelL);
+  updateFuelTracking(_fuelL, row.engineRPM);        // ← NEW LINE
+  updateFuelSessionServer(_fuelL, row.fuelLevelPct);
+    classifyFuelEvent(row, dk, ts);
+
     // ── Engine hours today + start/stop tracking ───────────────
   const lifetimeHours = parseFloat(eng.hours) || 0;
   engineHoursTodayComputed = updateEngineHoursBaseline(lifetimeHours);
@@ -1131,12 +1616,14 @@ app.get('/api/latest', (req, res) => {
 
 app.get('/api/health', (req, res) => {
     res.json({
-        status:     'ok',
-        uptime:     process.uptime().toFixed(0) + 's',
-        clients:    io.engine.clientsCount,
-        lastSeen:   latestReading && latestReading.serverTime || null,
-        datesStored: Object.keys(dateStore).sort(),
-        nfpaActive: latestReading && (latestReading.nfpa110Active || []).length || 0
+        status:        'ok',
+        mqttConnected: mqttClient.connected,
+        mongoConnected: !!db,
+        uptime:        process.uptime().toFixed(0) + 's',
+        clients:       io.engine.clientsCount,
+        lastSeen:      latestReading && latestReading.serverTime || null,
+        datesStored:   Object.keys(dateStore).sort(),
+        nfpaActive:    latestReading && (latestReading.nfpa110Active || []).length || 0
     });
 });
 
@@ -1182,8 +1669,41 @@ app.get('/api/engine/events', async (req, res) => {
   }
 });
 
+// GET — per-day DG start/stop cycle counts (for home-page chart)
+app.get('/api/engine/cycles', async (req, res) => {
+  const { from, to } = req.query;
+  if (!from || !to) return res.status(400).json({ error: 'Provide ?from=YYYY-MM-DD&to=YYYY-MM-DD' });
+  if (!db) return res.json({ days: [] });
 
-// GET — pre-aggregated per-day fuel/engine/power rollup (used by the 7-day daily-summary charts)
+  try {
+    const rows = await db.collection('engine_events').aggregate([
+      { $match: { date: { $gte: from, $lte: to } } },
+      { $group: { _id: { date: '$date', type: '$type' }, count: { $sum: 1 } } }
+    ]).toArray();
+
+    // Build a complete day list (fills in zero-days so the chart has no gaps)
+    const dayMap = {};
+    const cursor = new Date(from + 'T00:00:00');
+    const endD   = new Date(to   + 'T00:00:00');
+    while (cursor <= endD) {
+      const dk = cursor.toISOString().slice(0, 10);
+      dayMap[dk] = { date: dk, starts: 0, stops: 0 };
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    rows.forEach(r => {
+      const dk = r._id.date;
+      if (!dayMap[dk]) dayMap[dk] = { date: dk, starts: 0, stops: 0 };
+      if (r._id.type === 'start') dayMap[dk].starts = r.count;
+      if (r._id.type === 'stop')  dayMap[dk].stops  = r.count;
+    });
+
+    res.json({ days: Object.values(dayMap).sort((a, b) => a.date.localeCompare(b.date)) });
+  } catch (e) {
+    console.error('[EngineCycles] error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/api/daily-rollup', async (req, res) => {
   const { from, to } = req.query;
   if (!from || !to) return res.status(400).json({ error: 'Provide ?from=YYYY-MM-DD&to=YYYY-MM-DD' });
@@ -1214,7 +1734,7 @@ app.get('/api/daily-rollup', async (req, res) => {
 
     const result = days.map(d => ({
       date:        d._id,
-      consumedL:   Math.max(0, Math.round((d.fuelFirst || 0) - (d.fuelLast || 0))),
+      consumedL:   Math.round((d.fuelFirst || 0) - (d.fuelLast || 0)),   // raw, adjusted for refills below
       engHours:    +((d.runSamples * 2 / 3600).toFixed(2)),
       peakKw:      +(d.peakKw || 0).toFixed(1),
       avgKw:       +(d.avgKw  || 0).toFixed(1),
@@ -1226,9 +1746,125 @@ app.get('/api/daily-rollup', async (req, res) => {
       maxOilPsi:   +(d.maxOilPsi || 0).toFixed(1),
       avgBattV:    +(d.avgBattV || 0).toFixed(2)
     }));
+
+    // Add back confirmed refills so a refill can't hide real consumption
+    const refs = await db.collection('refills').find({ time: {
+      $gte: new Date(from + 'T00:00:00+05:30').toISOString(),
+      $lte: new Date(to   + 'T23:59:59.999+05:30').toISOString()
+    } }).toArray();
+    const addedBy = {};
+    refs.forEach(r => { const k = dayKeyOf(r.time); addedBy[k] = (addedBy[k] || 0) + (r.addedL || 0); });
+    result.forEach(d => {
+      d.refilledL = addedBy[d.date] || 0;
+      d.consumedL = Math.max(0, d.consumedL + d.refilledL);
+    });
+
     res.json({ days: result });
   } catch (e) {
     console.error('[DailyRollup] error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+async function runHoursForDate(dk) {
+  if (!db) return null;
+  const ev = await db.collection('engine_events').find({ date: dk, type: 'stop' }).toArray();
+  return +(ev.reduce((s, e) => s + (e.durationSec || 0), 0) / 3600).toFixed(2);
+}
+
+// ── Whole-day Min / Avg / Max, counted ONLY while the DG is running ──
+app.get('/api/today-stats', async (req, res) => {
+  const dk   = req.query.date || todayKey();
+  const keys = String(req.query.keys || '').split(',')
+                 .filter(k => HISTORY_KEYS.includes(k) && k !== 'timestamps');
+  if (!keys.length) return res.status(400).json({ error: 'Provide ?keys=voltL1N,voltL2N' });
+
+  const runHours = dk === todayKey() ? +(engineHoursTodayComputed || 0).toFixed(2) : await runHoursForDate(dk);
+  try {
+    if (db) {
+            const RUNNING = { $and: [ { $gt: ['$engineRPM', HISTORY_RPM_THRESHOLD] }, { $gt: ['$voltL1N', 20] } ] };
+      const g = { _id: null, runSamples: { $sum: { $cond: [RUNNING, 1, 0] } } };
+      keys.forEach(k => {
+        const run = { $cond: [RUNNING, `$${k}`, null] };
+        g[`${k}_min`] = { $min: run };
+        g[`${k}_max`] = { $max: run };
+        g[`${k}_avg`] = { $avg: run };
+      });
+      const r = await db.collection('history').aggregate([
+        { $match: { date: dk } }, { $group: g }
+      ]).toArray();
+      const d = r[0] || {};
+      const stats = {};
+      keys.forEach(k => {
+        stats[k] = {
+          min: +(d[`${k}_min`] ?? 0).toFixed(3),
+          max: +(d[`${k}_max`] ?? 0).toFixed(3),
+          avg: +(d[`${k}_avg`] ?? 0).toFixed(3)
+        };
+      });
+      return res.json({ date: dk, ran: (d.runSamples || 0) > 0, runHours, stats });
+    }
+
+    const rec = dateStore[dk];
+    const stats = {};
+    let ran = false;
+    keys.forEach(k => {
+      const v = [];
+      if (rec) rec.engineRPM.forEach((rpm, i) => { if (rpm > HISTORY_RPM_THRESHOLD && rec.voltL1N[i] > 20) v.push(rec[k][i]); });
+            if (v.length) ran = true;
+      stats[k] = v.length
+        ? { min: +Math.min(...v).toFixed(3), max: +Math.max(...v).toFixed(3),
+            avg: +(v.reduce((a, b) => a + b, 0) / v.length).toFixed(3) }
+        : { min: 0, max: 0, avg: 0 };
+    });
+    res.json({ date: dk, ran, runHours, stats });
+  } catch (e) {
+    console.error('[TodayStats] error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Diesel + runtime summary for one day
+app.get('/api/day-summary', async (req, res) => {
+  const dk = req.query.date || todayKey();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dk)) return res.status(400).json({ error: 'Provide ?date=YYYY-MM-DD' });
+  if (!db) return res.json({ date: dk, available: false });
+
+  try {
+    const dayFrom = new Date(dk + 'T00:00:00+05:30').toISOString();
+    const dayTo   = new Date(dk + 'T23:59:59.999+05:30').toISOString();
+    const proj = { projection: { _id: 0, fuelLevelL: 1, timestamps: 1 } };
+
+    const [first, last, runs, events, refs] = await Promise.all([
+      db.collection('history').find({ date: dk, fuelLevelL: { $gt: 0 } }, proj).sort({ timestamps: 1 }).limit(1).toArray(),
+      db.collection('history').find({ date: dk, fuelLevelL: { $gt: 0 } }, proj).sort({ timestamps: -1 }).limit(1).toArray(),
+      db.collection('fuel_runs').find({ date: dk }).toArray(),
+      db.collection('engine_events').find({ date: dk }).toArray(),
+      db.collection('refills').find({ time: { $gte: dayFrom, $lte: dayTo } }).toArray()
+    ]);
+
+    if (!first.length) return res.json({ date: dk, available: false });
+
+    const startL    = Math.round(first[0].fuelLevelL);
+    const endL      = Math.round(last[0].fuelLevelL);
+    const refilledL = refs.reduce((s, r) => s + (r.addedL || 0), 0);
+    const balanceL  = Math.max(0, startL + refilledL - endL);
+    const runL      = runs.reduce((s, r) => s + (r.consumedL || 0), 0);
+    const consumedL = runs.length ? runL : balanceL;
+
+    let runSec = events.filter(e => e.type === 'stop').reduce((s, e) => s + (e.durationSec || 0), 0);
+    if (!runSec) runSec = runs.reduce((s, r) => s + (r.durationSec || 0), 0);
+    if (dk === todayKey()) runSec = (engineHoursTodayComputed || 0) * 3600;
+    const runHours = +(runSec / 3600).toFixed(2);
+
+    res.json({
+      date: dk, available: true, startL, endL, refilledL, consumedL,
+      source: runs.length ? 'runs' : 'balance',
+      runHours, starts: events.filter(e => e.type === 'start').length,
+      burnLph: runHours > 0.05 && consumedL > 0 ? +(consumedL / runHours).toFixed(1) : null
+    });
+  } catch (e) {
+    console.error('[DaySummary] error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
@@ -1393,7 +2029,8 @@ function buildBroadcast() {
       transferLog: amfStateTracker.transferLog,
       crankLog:    crankTracker.crankLog,
       gensetInfo,
-      engineHoursToday: engineHoursTodayComputed   // ADD THIS
+      engineHoursToday: engineHoursTodayComputed,
+      fuelConsumption:  computeFuelConsumption()
     }
   };
 }

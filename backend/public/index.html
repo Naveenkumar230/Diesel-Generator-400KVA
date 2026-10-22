@@ -176,6 +176,7 @@
 </button>
 
 <button class="summary-card" id="dailySummaryBtn" title="Daily Summary"> 📝 </button>
+<button class="btn-refill" id="refillHdrBtn" title="Refill history">⛽ <span class="exp-lbl">Refill</span><span class="rf-hdr-badge" id="refillHdrBadge" style="display:none"></span></button>
 <!-- Export Excel -->
 <button class="btn-export" onclick="if(window.GSExport){GSExport.openDialog();}else{alert('Export not ready yet, please wait a moment.');}">
           <span style="font-size:1rem">📥</span>
@@ -185,6 +186,14 @@
         <div class="conn-badge live" id="connBadge">
           <span class="conn-dot"></span>
           <span id="connLabel">🟢 Live</span>
+        </div>
+
+        <!-- DG ON/OFF Cycle Badge -->
+        <button class="cyc-badge" id="cycleHdrBtn" title="Loading…">
+          <span class="cyc-badge-icon">🔁</span>
+          <span class="cyc-badge-count mono" id="cycleBadgeCount">—</span>
+          <span class="cyc-badge-lbl">cycles today</span>
+        </button>
     </div>
   </div>
   <!-- ROW 2: Live status strip -->
@@ -403,48 +412,67 @@
 
       <!-- Voltage L-N -->
 <div class="card">
-          <div class="card-label">🔌 Voltage L–N <span class="help-tip" title="Voltage from each wire to neutral. Normal = ~230V for 400V 3-phase">📢</span></div>
-        <div class="phase-big-row">
-          <div class="phase-big ph-a"><span class="pb-label">L1</span><span class="pb-val mono" id="vL1N">—</span><span class="pb-unit">V</span></div>
-          <div class="phase-big ph-b"><span class="pb-label">L2</span><span class="pb-val mono" id="vL2N">—</span><span class="pb-unit">V</span></div>
-          <div class="phase-big ph-c"><span class="pb-label">L3</span><span class="pb-val mono" id="vL3N">—</span><span class="pb-unit">V</span></div>
-        </div>
-        <div class="card-explain">📏 Each "L" = one electrical wire. 3 wires = 3-phase power. Normal range: 220–240V each</div>
-        <div class="click-hint">📊 Click for 24h graph</div>
-      </div>
+  <div class="card-label">🔌 Voltage L–N <span class="help-tip" title="Voltage from each wire to neutral. Normal = ~230V for 400V 3-phase">📢</span></div>
+  <div class="phase-big-row">
+    <div class="phase-big ph-a"><span class="pb-label">L1</span><span class="pb-val mono" id="vL1N">—</span><span class="pb-unit">V</span></div>
+    <div class="phase-big ph-b"><span class="pb-label">L2</span><span class="pb-val mono" id="vL2N">—</span><span class="pb-unit">V</span></div>
+    <div class="phase-big ph-c"><span class="pb-label">L3</span><span class="pb-val mono" id="vL3N">—</span><span class="pb-unit">V</span></div>
+  </div>
+  <div class="today-box">
+    <div class="today-title">📅 Today (12 AM → now) <span id="vTodayMeta"></span></div>
+    <table class="today-tbl"><thead><tr><th></th><th>Min</th><th>Avg</th><th>Max</th></tr></thead>
+      <tbody id="vTodayBody"><tr><td colspan="4" class="today-empty">Loading…</td></tr></tbody></table>
+  </div>
+  <div class="card-explain">📏 Each "L" = one electrical wire. 3 wires = 3-phase power. Normal range: 220–240V each</div>
+  <div class="click-hint">📊 Click for 24h graph</div>
+</div>
 
       <!-- Voltage L-L -->
       <div class="card clickable" onclick="openGraph('voltLL','⚡ Voltage Line-to-Line (L-L)','V')">
-        <div class="card-label">⚡ Voltage L–L <span class="help-tip" title="Voltage between two wires. Normal = ~400V for 3-phase">📢</span></div>
-        <div class="ll-table">
-          <div class="ll-row"><span class="ll-lbl ph-a">L1–L2</span><span class="ll-val mono" id="vL1L2">—</span><span class="ll-u">V</span></div>
-          <div class="ll-row"><span class="ll-lbl ph-b">L2–L3</span><span class="ll-val mono" id="vL2L3">—</span><span class="ll-u">V</span></div>
-          <div class="ll-row"><span class="ll-lbl ph-c">L3–L1</span><span class="ll-val mono" id="vL3L1">—</span><span class="ll-u">V</span></div>
-        </div>
-        <div class="card-explain">🔁 Measured between any 2 wires. Normal = ~400V. Big machines like AC motors use this</div>
-        <div class="click-hint">📊 Click for 24h graph</div>
-      </div>
+  <div class="card-label">⚡ Voltage L–L <span class="help-tip" title="Voltage between two wires. Normal = ~400V for 3-phase">📢</span></div>
+  <div class="ll-table">
+    <div class="ll-row"><span class="ll-lbl ph-a">L1–L2</span><span class="ll-val mono" id="vL1L2">—</span><span class="ll-u">V</span></div>
+    <div class="ll-row"><span class="ll-lbl ph-b">L2–L3</span><span class="ll-val mono" id="vL2L3">—</span><span class="ll-u">V</span></div>
+    <div class="ll-row"><span class="ll-lbl ph-c">L3–L1</span><span class="ll-val mono" id="vL3L1">—</span><span class="ll-u">V</span></div>
+  </div>
+  <div class="today-box">
+    <div class="today-title">📅 Today (12 AM → now) <span id="llTodayMeta"></span></div>
+    <table class="today-tbl"><thead><tr><th></th><th>Min</th><th>Avg</th><th>Max</th></tr></thead>
+      <tbody id="llTodayBody"><tr><td colspan="4" class="today-empty">Loading…</td></tr></tbody></table>
+  </div>
+  <div class="card-explain">🔁 Measured between any 2 wires. Normal = ~400V. Big machines like AC motors use this</div>
+  <div class="click-hint">📊 Click for 24h graph</div>
+</div>
 
-      <!-- Frequency -->
       <div class="card clickable" onclick="openGraph('freq','📡 Frequency','Hz')">
-        <div class="card-label">📡 Frequency <span class="help-tip" title="How many times per second the electricity cycles. India standard = 50Hz.">📢</span></div>
-        <div class="big-num mono" id="freqVal">—</div>
-        <div class="big-unit">Hz</div>
-        <div class="freq-target">🎯 Target: 50.00 Hz</div>
-        <div class="card-explain">🇮🇳 India standard = 50Hz. If generator runs at 1500 RPM → exactly 50Hz output</div>
-        <div class="click-hint">📊 Click for 24h graph</div>
-      </div>
+  <div class="card-label">📡 Frequency <span class="help-tip" title="How many times per second the electricity cycles. India standard = 50Hz.">📢</span></div>
+  <div class="big-num mono" id="freqVal">—</div>
+  <div class="big-unit">Hz</div>
+  <div class="freq-target">🎯 Target: 50.00 Hz</div>
+  <div class="today-box">
+    <div class="today-title">📅 Today (12 AM → now) <span id="frTodayMeta"></span></div>
+    <table class="today-tbl"><thead><tr><th></th><th>Min</th><th>Avg</th><th>Max</th></tr></thead>
+      <tbody id="frTodayBody"><tr><td colspan="4" class="today-empty">Loading…</td></tr></tbody></table>
+  </div>
+  <div class="card-explain">🇮🇳 India standard = 50Hz. If generator runs at 1500 RPM → exactly 50Hz output</div>
+  <div class="click-hint">📊 Click for 24h graph</div>
+</div>
 
-      <!-- Line Current -->
-      <div class="card clickable" onclick="openGraph('current','⚡ Line Current (Amps)','A')">
-        <div class="card-label">⚡ Line Current (Amps) <span class="help-tip" title="How much electricity is flowing in each wire. Higher load = higher amps.">📢</span></div>
-        <div class="phase-big-row">
-          <div class="phase-big ph-a"><span class="pb-label">L1</span><span class="pb-val mono" id="cL1">—</span><span class="pb-unit">A</span></div>
-          <div class="phase-big ph-b"><span class="pb-label">L2</span><span class="pb-val mono" id="cL2">—</span><span class="pb-unit">A</span></div>
-          <div class="phase-big ph-c"><span class="pb-label">L3</span><span class="pb-val mono" id="cL3">—</span><span class="pb-unit">A</span></div>
-        </div>
-<div class="card-explain">📡 Live from Modbus register — raw sensor readings from generator controller. Max rated: ~577A each</div>        <div class="click-hint">📊 Click for 24h graph</div>
-      </div>
+     <div class="card clickable" onclick="openGraph('current','⚡ Line Current (Amps)','A')">
+  <div class="card-label">⚡ Line Current (Amps) <span class="help-tip" title="How much electricity is flowing in each wire. Higher load = higher amps.">📢</span></div>
+  <div class="phase-big-row">
+    <div class="phase-big ph-a"><span class="pb-label">L1</span><span class="pb-val mono" id="cL1">—</span><span class="pb-unit">A</span></div>
+    <div class="phase-big ph-b"><span class="pb-label">L2</span><span class="pb-val mono" id="cL2">—</span><span class="pb-unit">A</span></div>
+    <div class="phase-big ph-c"><span class="pb-label">L3</span><span class="pb-val mono" id="cL3">—</span><span class="pb-unit">A</span></div>
+  </div>
+  <div class="today-box">
+    <div class="today-title">📅 Today (12 AM → now) <span id="cuTodayMeta"></span></div>
+    <table class="today-tbl"><thead><tr><th></th><th>Min</th><th>Avg</th><th>Max</th></tr></thead>
+      <tbody id="cuTodayBody"><tr><td colspan="4" class="today-empty">Loading…</td></tr></tbody></table>
+  </div>
+  <div class="card-explain">📡 Live from Modbus register — raw sensor readings from generator controller. Max rated: ~577A each</div>
+  <div class="click-hint">📊 Click for 24h graph</div>
+</div>
 
       <!-- Calculated Amps -->
       <div class="card clickable" onclick="openGraph('calcAmps','🧮 Calculated Total Amps','A')">
@@ -460,93 +488,128 @@
       </div>
 
       <!-- Current Load % -->
-      <div class="card clickable" onclick="openGraph('currPct','📊 Current Load %','%')">
-        <div class="card-label">📊 Current Load % <span class="help-tip" title="What % of maximum current is being used. 100% = full load = 577A per phase">📢</span></div>
-        <div class="curr-pct-list">
-          <div class="cpct-row">
-            <span class="cpct-lbl ph-a">L1</span>
-            <div class="cpct-bar-wrap"><div class="cpct-bar ph-a-fill" id="cpL1bar" style="width:0%"></div></div>
-            <span class="cpct-val mono" id="cpL1">—</span>
-          </div>
-          <div class="cpct-row">
-            <span class="cpct-lbl ph-b">L2</span>
-            <div class="cpct-bar-wrap"><div class="cpct-bar ph-b-fill" id="cpL2bar" style="width:0%"></div></div>
-            <span class="cpct-val mono" id="cpL2">—</span>
-          </div>
-          <div class="cpct-row">
-            <span class="cpct-lbl ph-c">L3</span>
-            <div class="cpct-bar-wrap"><div class="cpct-bar ph-c-fill" id="cpL3bar" style="width:0%"></div></div>
-            <span class="cpct-val mono" id="cpL3">—</span>
-          </div>
-        </div>
-<div class="card-explain">📡 Live from Modbus register — generator controller reports load % directly. Keep below 80% 👍</div>
-        <div class="click-hint">📊 Click for 24h graph</div>
-      </div>
+<div class="card clickable" onclick="openGraph('currPct','📊 Current Load %','%')">
+  <div class="card-label">📊 Current Load % <span class="help-tip" title="What % of maximum current is being used. 100% = full load = 577A per phase">📢</span></div>
+  <div class="curr-pct-list">
+    <div class="cpct-row">
+      <span class="cpct-lbl ph-a">L1</span>
+      <div class="cpct-bar-wrap"><div class="cpct-bar ph-a-fill" id="cpL1bar" style="width:0%"></div></div>
+      <span class="cpct-val mono" id="cpL1">—</span>
+    </div>
+    <div class="cpct-row">
+      <span class="cpct-lbl ph-b">L2</span>
+      <div class="cpct-bar-wrap"><div class="cpct-bar ph-b-fill" id="cpL2bar" style="width:0%"></div></div>
+      <span class="cpct-val mono" id="cpL2">—</span>
+    </div>
+    <div class="cpct-row">
+      <span class="cpct-lbl ph-c">L3</span>
+      <div class="cpct-bar-wrap"><div class="cpct-bar ph-c-fill" id="cpL3bar" style="width:0%"></div></div>
+      <span class="cpct-val mono" id="cpL3">—</span>
+    </div>
+  </div>
 
-      <!-- kW Card -->
-      <div class="card power-card clickable" onclick="openGraph('kw','⚡ Active Power (kW)','kW')">
-        <div class="card-label">⚡ Active Power (kW) <span class="help-tip" title="REAL power doing actual work. This is what you pay for!">📢</span></div>
-        <div class="power-total mono" id="kwTotal">—</div>
-        <div class="power-sub">kW total</div>
-        <div class="load-bar-wrap">
-          <div class="load-bar"><div class="load-fill kw-fill" id="kwBar" style="width:0%"></div></div>
-          <span class="load-pct" id="kwPct">0%</span>
-        </div>
-        <div class="power-detail-row">
-          <span class="pd ph-a">L1 <b id="kwL1">—</b></span>
-          <span class="pd ph-b">L2 <b id="kwL2">—</b></span>
-          <span class="pd ph-c">L3 <b id="kwL3">—</b></span>
-        </div>
-        <div class="card-explain">💡 This is the USEFUL power. Running fans, motors, lights uses kW. Rated max: 320 kW</div>
-        <div class="click-hint">📊 Click for 24h graph</div>
-      </div>
+  <div class="today-box">
+    <div class="today-title">📅 Today (12 AM → now) <span id="cpTodayMeta"></span></div>
+    <table class="today-tbl"><thead><tr><th></th><th>Min</th><th>Avg</th><th>Max</th></tr></thead>
+      <tbody id="cpTodayBody"><tr><td colspan="4" class="today-empty">Loading…</td></tr></tbody></table>
+  </div>
+
+  <div class="card-explain">📡 Live from Modbus register — generator controller reports load % directly. Keep below 80% 👍</div>
+  <div class="click-hint">📊 Click for 24h graph</div>
+</div>
+
+    <!-- kW Card -->
+<div class="card power-card clickable" onclick="openGraph('kw','⚡ Active Power (kW)','kW')">
+  <div class="card-label">⚡ Active Power (kW) <span class="help-tip" title="REAL power doing actual work. This is what you pay for!">📢</span></div>
+  <div class="power-total mono" id="kwTotal">—</div>
+  <div class="power-sub">kW total</div>
+  <div class="load-bar-wrap">
+    <div class="load-bar"><div class="load-fill kw-fill" id="kwBar" style="width:0%"></div></div>
+    <span class="load-pct" id="kwPct">0%</span>
+  </div>
+  <div class="power-detail-row">
+    <span class="pd ph-a">L1 <b id="kwL1">—</b></span>
+    <span class="pd ph-b">L2 <b id="kwL2">—</b></span>
+    <span class="pd ph-c">L3 <b id="kwL3">—</b></span>
+  </div>
+
+  <div class="today-box">
+    <div class="today-title">📅 Today (12 AM → now) <span id="kwTodayMeta"></span></div>
+    <table class="today-tbl"><thead><tr><th></th><th>Min</th><th>Avg</th><th>Max</th></tr></thead>
+      <tbody id="kwTodayBody"><tr><td colspan="4" class="today-empty">Loading…</td></tr></tbody></table>
+  </div>
+
+  <div class="card-explain">💡 This is the USEFUL power. Running fans, motors, lights uses kW. Rated max: 320 kW</div>
+  <div class="click-hint">📊 Click for 24h graph</div>
+</div>
 
       <!-- kVA Card -->
-      <div class="card power-card clickable" onclick="openGraph('kva','🔋 Apparent Power (kVA)','kVA')">
-        <div class="card-label">🔋 Apparent Power (kVA) <span class="help-tip" title="Total power the generator produces. Generator is rated in kVA.">📢</span></div>
-        <div class="power-total mono" id="kvaTotal">—</div>
-        <div class="power-sub">kVA total</div>
-        <div class="load-bar-wrap">
-          <div class="load-bar"><div class="load-fill kva-fill" id="kvaBar" style="width:0%"></div></div>
-          <span class="load-pct" id="kvaPct">0%</span>
-        </div>
-        <div class="power-detail-row">
-          <span class="pd ph-a">L1 <b id="kvaL1">—</b></span>
-          <span class="pd ph-b">L2 <b id="kvaL2">—</b></span>
-          <span class="pd ph-c">L3 <b id="kvaL3">—</b></span>
-        </div>
-        <div class="card-explain">🏭 Generator nameplate rating is in kVA. kVA = kW ÷ Power Factor. Rated: 400 kVA</div>
-        <div class="click-hint">📊 Click for 24h graph</div>
-      </div>
+<div class="card power-card clickable" onclick="openGraph('kva','🔋 Apparent Power (kVA)','kVA')">
+  <div class="card-label">🔋 Apparent Power (kVA) <span class="help-tip" title="Total power the generator produces. Generator is rated in kVA.">📢</span></div>
+  <div class="power-total mono" id="kvaTotal">—</div>
+  <div class="power-sub">kVA total</div>
+  <div class="load-bar-wrap">
+    <div class="load-bar"><div class="load-fill kva-fill" id="kvaBar" style="width:0%"></div></div>
+    <span class="load-pct" id="kvaPct">0%</span>
+  </div>
+  <div class="power-detail-row">
+    <span class="pd ph-a">L1 <b id="kvaL1">—</b></span>
+    <span class="pd ph-b">L2 <b id="kvaL2">—</b></span>
+    <span class="pd ph-c">L3 <b id="kvaL3">—</b></span>
+  </div>
+
+  <div class="today-box">
+    <div class="today-title">📅 Today (12 AM → now) <span id="kvaTodayMeta"></span></div>
+    <table class="today-tbl"><thead><tr><th></th><th>Min</th><th>Avg</th><th>Max</th></tr></thead>
+      <tbody id="kvaTodayBody"><tr><td colspan="4" class="today-empty">Loading…</td></tr></tbody></table>
+  </div>
+
+  <div class="card-explain">🏭 Generator nameplate rating is in kVA. kVA = kW ÷ Power Factor. Rated: 400 kVA</div>
+  <div class="click-hint">📊 Click for 24h graph</div>
+</div>
 
       <!-- kVAR Card -->
-      <div class="card power-card clickable" onclick="openGraph('kvar','🔄 Reactive Power (kVAR)','kVAR')">
-        <div class="card-label">🔄 Reactive Power (kVAr) <span class="help-tip" title="Wasted power used by motors/transformers for magnetic fields. Lower = better!">📢</span></div>
-        <div class="power-total mono" id="kvarTotal">—</div>
-        <div class="power-sub">kVAr total</div>
-        <div class="power-detail-row" style="margin-top:auto">
-          <span class="pd ph-a">L1 <b id="kvarL1">—</b></span>
-          <span class="pd ph-b">L2 <b id="kvarL2">—</b></span>
-          <span class="pd ph-c">L3 <b id="kvarL3">—</b></span>
-        </div>
-        <div class="card-explain">🌀 This is WASTED power from motors/transformers. Lower kVAR = more efficient system!</div>
-        <div class="click-hint">📊 Click for 24h graph</div>
-      </div>
+<div class="card power-card clickable" onclick="openGraph('kvar','🔄 Reactive Power (kVAR)','kVAR')">
+  <div class="card-label">🔄 Reactive Power (kVAr) <span class="help-tip" title="Wasted power used by motors/transformers for magnetic fields. Lower = better!">📢</span></div>
+  <div class="power-total mono" id="kvarTotal">—</div>
+  <div class="power-sub">kVAr total</div>
+  <div class="power-detail-row" style="margin-top:auto">
+    <span class="pd ph-a">L1 <b id="kvarL1">—</b></span>
+    <span class="pd ph-b">L2 <b id="kvarL2">—</b></span>
+    <span class="pd ph-c">L3 <b id="kvarL3">—</b></span>
+  </div>
+
+  <div class="today-box">
+    <div class="today-title">📅 Today (12 AM → now) <span id="kvarTodayMeta"></span></div>
+    <table class="today-tbl"><thead><tr><th></th><th>Min</th><th>Avg</th><th>Max</th></tr></thead>
+      <tbody id="kvarTodayBody"><tr><td colspan="4" class="today-empty">Loading…</td></tr></tbody></table>
+  </div>
+
+  <div class="card-explain">🌀 This is WASTED power from motors/transformers. Lower kVAR = more efficient system!</div>
+  <div class="click-hint">📊 Click for 24h graph</div>
+</div>
 
       <!-- Power Factor Ring -->
-      <div class="card pf-card clickable" onclick="openGraph('pf','📐 Power Factor','')">
-        <div class="card-label">📐 Power Factor <span class="help-tip" title="Efficiency ratio. PF = kW/kVA. 1.0 = perfect, 0.8 = typical.">📢</span></div>
-        <div class="pf-ring-host">
-          <svg class="pf-svg" viewBox="0 0 100 100">
-            <circle class="pf-track" cx="50" cy="50" r="38"/>
-            <circle class="pf-arc" id="pfArc" cx="50" cy="50" r="38" stroke-dasharray="0 239" stroke-dashoffset="60"/>
-          </svg>
-          <div class="pf-center"><span class="pf-num" id="pfNum">—</span></div>
-        </div>
-        <div class="pf-status" id="pfStatus">—</div>
-        <div class="card-explain">📈 PF 0.9–1.0 = Excellent ✅ | 0.8–0.9 = OK ⚠️ | Below 0.8 = Poor ❌</div>
-        <div class="click-hint">📊 Click for 24h graph</div>
-      </div>
+<div class="card pf-card clickable" onclick="openGraph('pf','📐 Power Factor','')">
+  <div class="card-label">📐 Power Factor <span class="help-tip" title="Efficiency ratio. PF = kW/kVA. 1.0 = perfect, 0.8 = typical.">📢</span></div>
+  <div class="pf-ring-host">
+    <svg class="pf-svg" viewBox="0 0 100 100">
+      <circle class="pf-track" cx="50" cy="50" r="38"/>
+      <circle class="pf-arc" id="pfArc" cx="50" cy="50" r="38" stroke-dasharray="0 239" stroke-dashoffset="60"/>
+    </svg>
+    <div class="pf-center"><span class="pf-num" id="pfNum">—</span></div>
+  </div>
+  <div class="pf-status" id="pfStatus">—</div>
+
+  <div class="today-box">
+    <div class="today-title">📅 Today (12 AM → now) <span id="pfTodayMeta"></span></div>
+    <table class="today-tbl"><thead><tr><th></th><th>Min</th><th>Avg</th><th>Max</th></tr></thead>
+      <tbody id="pfTodayBody"><tr><td colspan="4" class="today-empty">Loading…</td></tr></tbody></table>
+  </div>
+
+  <div class="card-explain">📈 PF 0.9–1.0 = Excellent ✅ | 0.8–0.9 = OK ⚠️ | Below 0.8 = Poor ❌</div>
+  <div class="click-hint">📊 Click for 24h graph</div>
+</div>
 
     </div>
   </section>
@@ -723,8 +786,8 @@
     <div class="fss-icon">⚡</div>
     <div class="fss-body">
       <div class="fss-label">Current Load</div>
-      <div class="fss-value mono" id="fuelCurrentLoad">— kW</div>
-      <div class="fss-sub" id="fuelLoadPct">—% of 320 kW rated</div>
+     <div class="fss-value mono" id="fuelCurrentLoad">0 kW</div>
+<div class="fss-sub" id="fuelLoadPct">0% of 320 kW rated</div>
     </div>
   </div>
 
@@ -740,24 +803,16 @@
     </div>
   </div>
 
-  <!-- <div class="fss-cell" id="fuelNoiseCell" style="display:none">
-    <div class="fss-icon">⚠️</div>
-    <div class="fss-body">
-      <div class="fss-label">Noise Filtered Today</div>
-      <div class="fss-value mono" id="fuelNoiseToday">— L</div>
-      <div class="fss-sub" id="day1NoiseL">—</div>
-    </div>
-  </div> -->
+  </div>                               <!-- closes fuel-session-strip -->
 
-</div>
+  <!-- Selected-day diesel & runtime (shown only when a past date is chosen) -->
+  <div class="day-box" id="fuelDayBox" style="display:none" onclick="event.stopPropagation()">
+    <div class="day-box-title" id="fdTitle"></div>
+    <table class="today-tbl"><tbody id="fdBody"></tbody></table>
+  </div>
 
   <!-- ROW 2: Cards -->
   <div class="card-row fuel-detail-row">
-    <!-- CARD 1: Tank Level -->
-   <!-- ════════════════════════════════════════════════════════════
-     TANK LEVEL CARD — Replace the ENTIRE .fuel-tank-card div
-     in index.html with this block
-     ════════════════════════════════════════════════════════════ -->
 
 <div class="card fuel-tank-card" onclick="event.stopPropagation()">
   <div class="card-label">⛽ Tank Level — 785 L Total Capacity</div>
@@ -955,8 +1010,70 @@
 </section>
 
 </main>
+
 <div id="gsDetailOverlay"></div>
+
+<!-- ═══════ DG CYCLE FULL-PAGE OVERLAY ═══════ -->
+<div id="cycleOverlay">
+  <div class="cyc-topbar">
+    <button class="cyc-back-btn" id="cycBackBtn">← Back</button>
+    <span class="cyc-title">🔁 DG Start / Stop Cycles</span>
+    <span class="cyc-live-badge"><span class="cyc-live-dot"></span>LIVE</span>
+  </div>
+
+  <div class="cyc-datebar">
+    <label>FROM</label><input type="date" id="cycFrom">
+    <label>TO</label><input type="date" id="cycTo">
+    <button class="cyc-preset-btn" data-preset="today">Today</button>
+    <button class="cyc-preset-btn" data-preset="7d">Last 7d</button>
+    <button class="cyc-preset-btn" data-preset="30d">Last 30d</button>
+    <button class="cyc-fetch-btn" id="cycFetchBtn">⬇ Fetch</button>
+    <span class="cyc-pts-label" id="cycPtsLabel"></span>
+  </div>
+
+  <div class="cyc-stats-row">
+    <div class="cyc-stat-card">
+      <div class="cyc-stat-lbl">▶️ Total Starts</div>
+      <div class="cyc-stat-val mono" id="cycTotalStarts">—</div>
+    </div>
+    <div class="cyc-stat-card">
+      <div class="cyc-stat-lbl">⏹️ Total Stops</div>
+      <div class="cyc-stat-val mono" id="cycTotalStops">—</div>
+    </div>
+    <div class="cyc-stat-card">
+      <div class="cyc-stat-lbl">📅 Days Selected</div>
+      <div class="cyc-stat-val mono" id="cycDaysCount">—</div>
+    </div>
+    <div class="cyc-stat-card">
+      <div class="cyc-stat-lbl">📊 Avg Cycles / Day</div>
+      <div class="cyc-stat-val mono" id="cycAvgPerDay">—</div>
+    </div>
+  </div>
+
+  <div class="cyc-chart-panel">
+    <div class="cyc-chart-title">Starts vs Stops per day — hover a bar to see exact ON/OFF times</div>
+    <div class="cyc-chart-wrap">
+      <canvas id="cycleChart"></canvas>
+    </div>
+  </div>
+
+  <div class="cyc-table-panel">
+    <div class="cyc-chart-title">Event Log — every start/stop in range</div>
+    <div class="cyc-table-scroll">
+      <table class="cyc-table" id="cycEventTable">
+        <thead>
+          <tr><th>Date</th><th>Started</th><th>Stopped</th><th>Duration</th></tr>
+        </thead>
+        <tbody id="cycEventTableBody">
+          <tr><td colspan="4" class="cyc-empty">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
 <script src="app.js"></script>
+<script src="dg-cycle-counter.js"></script>
 <script src="gensight-fuel-detail-fix.js"></script>
 <script src="fuel-session-fix.js"></script>
 <script src="fuel-render-patch.js"></script>
@@ -965,6 +1082,6 @@
 <script src="refill-prediction.js"></script>
 <script src="settings-panel.js"></script>
 <script src="daily-summary.js"></script>
-</body>
+</div>
 </body>
 </html>

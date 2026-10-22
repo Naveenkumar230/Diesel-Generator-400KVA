@@ -1,987 +1,380 @@
 'use strict';
-
 // ════════════════════════════════════════════════════════════════
-//  GenSight Refill Tracker  — fully responsive rewrite
+//  GenSight Refill — v2  (REPLACES the whole old refill-prediction.js)
+//  • Homepage: only a "Refill" button in the header (+ pending badge)
+//  • Server detects candidates → popup asks Refill / No Refill
+//  • Full-page details view: filters, chart, history, review log, settings
 // ════════════════════════════════════════════════════════════════
-
 (function () {
+  const $ = id => document.getElementById(id);
+  const TZ = 'Asia/Kolkata';
+    const MIN_REFILL_L = 100;
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const fDate = iso => new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', timeZone: TZ });
+  const fTime = iso => new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: TZ });
+  const dtToInput = d => new Date(d.getTime() + 19800000).toISOString().slice(0, 16);          // → "YYYY-MM-DDTHH:mm" in IST
+  const inputToIso = (v, end) => new Date(v + (end ? ':59.999' : ':00') + '+05:30').toISOString();
 
-  const TANK_CAPACITY = 785;
+  let settings = { refillPredictLowL: 25, refillPredictHighL: 70, refillMinRiseL: 70, refillSettleSec: 90, refillNoiseBandL: 10, tankCapacityL: 785 };
+  let confirmed = [], review = [], queue = [], current = null, busy = false, chart = null;
+  const snoozed = new Set();
 
-  // ── CSS ──────────────────────────────────────────────────────
-  const STYLE = `
+  async function api(url, opt) {
+    const r = await fetch(url, opt); let j = null;
+    try { j = await r.json(); } catch (e) { /* non-JSON */ }
+    if (!r.ok) { const e = new Error((j && j.error) || ('HTTP ' + r.status)); e.status = r.status; e.body = j; throw e; }
+    return j;
+  }
+  const post = (url, body, headers) => api(url, { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, headers || {}), body: JSON.stringify(body || {}) });
 
-  /* ══ POPUP ══════════════════════════════════════════════════ */
-  #refillPopupOverlay {
-    display: none; position: fixed; inset: 0; z-index: 999999;
-    background: rgba(15,23,42,.65); backdrop-filter: blur(6px);
-    align-items: center; justify-content: center;
-    padding: 12px;
-    box-sizing: border-box;
+  // Prediction thresholds classify an amount. They NEVER block detection or confirmation.
+  function classify(L) {
+    if (L < settings.refillPredictLowL)  return { k: 'below',  t: 'Below predicted range' };
+    if (L > settings.refillPredictHighL) return { k: 'above',  t: 'Above predicted range' };
+    return { k: 'within', t: 'Within predicted range' };
   }
-  #refillPopupOverlay.open { display: flex; }
+  const badge = L => { const c = classify(L); return `<span class="rf-b rf-b-${c.k}">${c.t}</span>`; };
 
-  .rp-box {
-    background: #fff; border-radius: 20px;
-    border: 2px solid #059669;
-    box-shadow: 0 24px 64px rgba(5,150,105,.25), 0 0 0 4px rgba(5,150,105,.08);
-    width: 100%; max-width: 480px;
-    font-family: 'Nunito', sans-serif;
-    animation: rpSlide .28s cubic-bezier(.34,1.56,.64,1);
-    overflow: hidden;
-  }
-  @keyframes rpSlide {
-    from { transform: translateY(40px) scale(.94); opacity: 0; }
-    to   { transform: translateY(0) scale(1);      opacity: 1; }
-  }
-  .rp-head {
-    background: linear-gradient(135deg, #059669, #047857);
-    padding: 16px 20px;
-    display: flex; align-items: center; gap: 12px;
-  }
-  .rp-icon { font-size: 2rem; line-height: 1; }
-  .rp-head-text { flex: 1; min-width: 0; }
-  .rp-title { font-size: 1rem; font-weight: 900; color: #fff; }
-  .rp-subtitle { font-size: .74rem; color: rgba(255,255,255,.8); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  // ── CSS ───────────────────────────────────────────────────────
+  const st = document.createElement('style');
+  st.textContent = `
+  .btn-refill{position:relative;display:flex;align-items:center;gap:6px;padding:7px 13px;border-radius:10px;background:#ECFDF5;border:1px solid rgba(5,150,105,.35);cursor:pointer;font-family:inherit;font-size:.74rem;font-weight:800;color:#047857;white-space:nowrap;flex-shrink:0;transition:all .18s}
+  .btn-refill:hover{background:#D1FAE5;border-color:#059669}
+  .rf-hdr-badge{position:absolute;top:-6px;right:-6px;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:#DC2626;color:#fff;font-size:.62rem;font-weight:900;display:grid;place-items:center;animation:rfPulse 1.4s infinite}
+  @keyframes rfPulse{0%,100%{box-shadow:0 0 0 0 rgba(220,38,38,.5)}50%{box-shadow:0 0 0 6px rgba(220,38,38,0)}}
 
-  .rp-body { padding: 16px 20px; display: flex; flex-direction: column; gap: 14px; }
+  #refillPopupOverlay{display:none;position:fixed;inset:0;z-index:999999;background:rgba(15,23,42,.65);backdrop-filter:blur(6px);align-items:center;justify-content:center;padding:12px;box-sizing:border-box}
+  #refillPopupOverlay.open{display:flex}
+  .rp-box{background:#fff;border-radius:20px;border:2px solid #059669;box-shadow:0 24px 64px rgba(5,150,105,.25);width:100%;max-width:480px;max-height:96vh;overflow-y:auto;font-family:'Nunito',sans-serif}
+  .rp-head{background:linear-gradient(135deg,#059669,#047857);padding:16px 20px;display:flex;align-items:center;gap:12px}
+  .rp-icon{font-size:2rem}.rp-title{font-size:1rem;font-weight:900;color:#fff}.rp-subtitle{font-size:.74rem;color:rgba(255,255,255,.85);margin-top:2px}
+  .rp-body{padding:16px 20px;display:flex;flex-direction:column;gap:12px}
+  .rp-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+  .rp-stat{background:#F0FDF4;border:1.5px solid #BBF7D0;border-radius:10px;padding:10px 6px;text-align:center}
+  .rp-stat-val{font-size:1.1rem;font-weight:900;color:#059669;font-family:'JetBrains Mono',monospace}
+  .rp-stat-lbl{font-size:.58rem;font-weight:800;color:#6B7280;text-transform:uppercase;letter-spacing:.06em}
+  .rp-meta{font-size:.74rem;color:#4A5568;line-height:1.7;background:#F8FAFF;border:1.5px solid #E2E8F5;border-radius:10px;padding:8px 12px}
+  .rp-note{font-size:.70rem;color:#92400E;background:#FEF3C7;border-radius:8px;padding:7px 10px}
+  .rp-lbl{font-size:.66rem;font-weight:800;color:#6B7280;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px}
+  .rp-input{width:100%;padding:10px 12px;border-radius:10px;border:2px solid #D1D5DB;background:#F9FAFB;font-family:inherit;font-size:.9rem;font-weight:700;color:#1A2340;outline:none;box-sizing:border-box}
+  .rp-input:focus{border-color:#059669;background:#fff}
+  .rp-err{color:#DC2626;font-size:.76rem;font-weight:800;min-height:1.1em}
+  .rp-actions{display:flex;gap:10px}
+  .rp-btn{flex:1;padding:12px;border-radius:10px;border:none;font-family:inherit;font-size:.88rem;font-weight:900;cursor:pointer;transition:all .15s}
+  .rp-btn:disabled{opacity:.55;cursor:wait}
+  .rp-yes{background:linear-gradient(135deg,#059669,#047857);color:#fff}
+  .rp-no{background:#FEE2E2;color:#B91C1C;border:1.5px solid #FCA5A5}
+  .rp-later{flex:0 0 auto;padding:12px 14px;background:#F9FAFB;color:#6B7280;border:1.5px solid #D1D5DB}
 
-  .rp-stats {
-    display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
-  }
-  .rp-stat {
-    background: #F0FDF4; border: 1.5px solid #BBF7D0;
-    border-radius: 10px; padding: 10px 8px; text-align: center;
-  }
-  .rp-stat-icon { font-size: 1.1rem; }
-  .rp-stat-val {
-    font-size: 1.15rem; font-weight: 900; color: #059669;
-    font-family: 'JetBrains Mono', monospace; margin: 2px 0 1px;
-  }
-  .rp-stat-lbl { font-size: .60rem; font-weight: 800; color: #6B7280; text-transform: uppercase; letter-spacing: .06em; }
+  #refillToast{display:none;position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:1000000;background:#1A2340;color:#fff;border-radius:12px;padding:11px 18px;font:800 .8rem 'Nunito',sans-serif;box-shadow:0 8px 28px rgba(0,0,0,.35)}
 
-  .rp-added-banner {
-    background: linear-gradient(135deg, #ECFDF5, #D1FAE5);
-    border: 2px solid #059669; border-radius: 10px;
-    padding: 12px; text-align: center;
-  }
-  .rp-added-num {
-    font-size: 2rem; font-weight: 900; color: #059669;
-    font-family: 'JetBrains Mono', monospace; line-height: 1;
-  }
-  .rp-added-lbl { font-size: .74rem; font-weight: 800; color: #047857; margin-top: 2px; }
-
-  .rp-person-lbl {
-    font-size: .68rem; font-weight: 800; color: #6B7280;
-    text-transform: uppercase; letter-spacing: .08em; margin-bottom: 7px;
-  }
-  .rp-person-input {
-    width: 100%; padding: 10px 12px; border-radius: 10px;
-    border: 2px solid #D1D5DB; background: #F9FAFB;
-    font-family: 'Nunito', sans-serif; font-size: .9rem;
-    font-weight: 700; color: #1A2340; outline: none;
-    box-sizing: border-box; transition: border-color .18s;
-  }
-  .rp-person-input:focus { border-color: #059669; background: #fff; }
-  .rp-person-input::placeholder { color: #9CA3AF; font-weight: 600; }
-
-  .rp-quick-names {
-    display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px;
-  }
-  .rp-qname {
-    padding: 5px 12px; border-radius: 20px;
-    border: 1.5px solid #D1D5DB; background: #F9FAFB;
-    color: #4B5563; font-family: inherit; font-size: .72rem;
-    font-weight: 700; cursor: pointer; transition: all .15s;
-  }
-  .rp-qname:hover  { border-color: #059669; color: #059669; background: #F0FDF4; }
-  .rp-qname.selected { border-color: #059669; background: #059669; color: #fff; }
-
-  .rp-footer {
-    display: flex; gap: 10px; padding: 0 20px 18px;
-  }
-  .rp-btn-confirm {
-    flex: 1; padding: 11px; border-radius: 10px;
-    background: linear-gradient(135deg, #059669, #047857);
-    color: #fff; border: none; font-family: inherit;
-    font-size: .88rem; font-weight: 900; cursor: pointer;
-    box-shadow: 0 2px 8px rgba(5,150,105,.35); transition: all .18s;
-  }
-  .rp-btn-confirm:hover { background: linear-gradient(135deg, #047857, #065F46); }
-  .rp-btn-skip {
-    padding: 11px 16px; border-radius: 10px;
-    border: 1.5px solid #D1D5DB; background: #F9FAFB;
-    color: #6B7280; font-family: inherit; font-size: .8rem;
-    font-weight: 800; cursor: pointer; transition: all .15s;
-  }
-  .rp-btn-skip:hover { background: #F3F4F6; }
-
-  /* ══ REFILL TRACKER CARD ════════════════════════════════════ */
-  .refill-tracker-card {
-    background: #fff;
-    border: 1.5px solid #E2E8F5;
-    border-radius: 14px;
-    padding: 16px;
-    box-shadow: 0 1px 8px rgba(37,99,235,.05);
-    margin-top: 14px;
-    font-family: 'Nunito', sans-serif;
-    box-sizing: border-box;
-    width: 100%;
-    overflow: hidden;
-  }
-
-  /* header row */
-  .rtc-header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 10px;
-    margin-bottom: 14px;
-    flex-wrap: wrap;
-  }
-  .rtc-title {
-    font-size: .88rem; font-weight: 900; color: #1A2340;
-    display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
-  }
-  .rtc-badge {
-    background: #ECFDF5; border: 1.5px solid #BBF7D0;
-    color: #059669; font-size: .62rem; font-weight: 800;
-    padding: 2px 9px; border-radius: 20px; letter-spacing: .05em;
-    text-transform: uppercase; white-space: nowrap;
-  }
-  .rtc-actions { display: flex; gap: 7px; flex-wrap: wrap; }
-  .rtc-btn {
-    padding: 6px 12px; border-radius: 8px; border: 1.5px solid #C8D5EF;
-    background: #F8FAFF; color: #4A5568; font-family: inherit;
-    font-size: .72rem; font-weight: 800; cursor: pointer; transition: all .15s;
-    white-space: nowrap;
-  }
-  .rtc-btn:hover { border-color: #2563EB; color: #2563EB; background: #EFF6FF; }
-  .rtc-btn.green { border-color: #BBF7D0; color: #059669; background: #F0FDF4; }
-  .rtc-btn.green:hover { background: #DCFCE7; }
-
-  /* ── summary grid — 2 cols on mobile, 4 on wide ── */
-  .rtc-summary {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 8px;
-    margin-bottom: 14px;
-  }
-  @media (min-width: 540px) {
-    .rtc-summary { grid-template-columns: repeat(4, 1fr); }
-  }
-  .rtc-sum-item {
-    background: #F8FAFF; border: 1.5px solid #E2E8F5;
-    border-radius: 10px; padding: 10px 12px;
-    min-width: 0;
-  }
-  .rtc-sum-lbl {
-    font-size: .60rem; font-weight: 800; color: #8A9BB5;
-    text-transform: uppercase; letter-spacing: .07em; margin-bottom: 4px;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  }
-  .rtc-sum-val {
-    font-size: 1rem; font-weight: 900; color: #1A2340;
-    font-family: 'JetBrains Mono', monospace;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  }
-  .rtc-sum-sub { font-size: .60rem; color: #8A9BB5; margin-top: 2px; }
-
-  /* ── chart ── */
-  .rtc-chart-wrap {
-    position: relative;
-    height: 180px;
-    margin-bottom: 14px;
-    width: 100%;
-  }
-
-  /* ── table — scroll on small screens ── */
-  .rtc-table-wrap {
-    overflow-x: auto;
-    border-radius: 10px;
-    border: 1.5px solid #E2E8F5;
-    -webkit-overflow-scrolling: touch;
-  }
-  .rtc-table {
-    width: 100%;
-    min-width: 520px;   /* allows horizontal scroll on mobile */
-    border-collapse: collapse;
-    font-size: .72rem;
-  }
-  .rtc-table th {
-    background: #1A2340; color: #fff; padding: 7px 10px;
-    text-align: left; font-size: .60rem; font-weight: 800;
-    letter-spacing: .06em; text-transform: uppercase; white-space: nowrap;
-  }
-  .rtc-table td {
-    padding: 7px 10px; border-bottom: 1px solid #F0F4FF;
-    color: #1A2340; white-space: nowrap;
-  }
-  .rtc-table tr:last-child td { border-bottom: none; }
-  .rtc-table tr:nth-child(even) td { background: #F8FAFF; }
-  .rtc-table tr:hover td { background: #EFF6FF; }
-  .rtc-added-cell { font-weight: 900; color: #059669; font-family: 'JetBrains Mono', monospace; }
-  .rtc-person-cell { display: flex; align-items: center; gap: 5px; }
-  .rtc-person-edit {
-    background: none; border: none; cursor: pointer;
-    font-size: .68rem; color: #8A9BB5; padding: 2px 4px;
-    border-radius: 4px; transition: all .15s; flex-shrink: 0;
-  }
-  .rtc-person-edit:hover { background: #F0F4FF; color: #2563EB; }
-  .rtc-auto-badge {
-    font-size: .56rem; background: #FEF3C7; color: #92400E;
-    padding: 1px 5px; border-radius: 8px; font-weight: 700;
-    white-space: nowrap;
-  }
-  .rtc-empty {
-    text-align: center; padding: 28px 16px; color: #8A9BB5;
-    font-size: .80rem; font-style: italic; line-height: 1.6;
-  }
-
-  /* ── threshold config ── */
-  .rtc-config {
-    display: flex; align-items: center; gap: 8px;
-    padding: 10px 12px; background: #F8FAFF;
-    border: 1.5px solid #E2E8F5; border-radius: 10px;
-    margin-top: 10px; flex-wrap: wrap;
-  }
-  .rtc-config-lbl { font-size: .68rem; font-weight: 800; color: #6B7280; white-space: nowrap; }
-  .rtc-config input[type=range] { flex: 1; min-width: 80px; accent-color: #059669; }
-  .rtc-config-val {
-    font-size: .80rem; font-weight: 900; color: #059669;
-    font-family: 'JetBrains Mono', monospace; min-width: 56px;
-    white-space: nowrap;
-  }
-  .rtc-config-hint {
-    font-size: .60rem; color: #9CA3AF; width: 100%;
-  }
-
-  /* ══ TOAST ══════════════════════════════════════════════════ */
-  #refillToast {
-    display: none; position: fixed; bottom: 16px; right: 16px;
-    left: 16px;
-    z-index: 99998; background: #1A2340;
-    border: 2px solid #059669; border-radius: 14px;
-    padding: 14px 18px; max-width: 360px;
-    margin-left: auto;
-    box-shadow: 0 8px 32px rgba(0,0,0,.35);
-    animation: rtToast .3s ease;
-    font-family: 'Nunito', sans-serif;
-    box-sizing: border-box;
-  }
-  @media (min-width: 420px) {
-    #refillToast { left: auto; }
-  }
-  @keyframes rtToast {
-    from { transform: translateY(20px); opacity: 0; }
-    to   { transform: translateY(0);    opacity: 1; }
-  }
-  .rt-toast-title { font-size: .86rem; font-weight: 900; color: #34D399; margin-bottom: 4px; }
-  .rt-toast-body  { font-size: .74rem; color: #CBD5E1; line-height: 1.5; }
-  .rt-toast-btn {
-    margin-top: 10px; padding: 7px 14px; border-radius: 8px;
-    background: #059669; border: none; color: #fff;
-    font-family: inherit; font-size: .74rem; font-weight: 800;
-    cursor: pointer; width: 100%;
-  }
+  #refillOverlay{display:none;position:fixed;inset:0;z-index:9998;background:#F0F4FF;font-family:'Nunito',sans-serif;color:#1A2340;overflow-y:auto}
+  #refillOverlay.open{display:block}
+  .rf-top{display:flex;align-items:center;gap:14px;padding:14px 28px;background:#fff;border-bottom:2px solid #E2E8F5;position:sticky;top:0;z-index:5;box-shadow:0 2px 12px rgba(37,99,235,.07);flex-wrap:wrap}
+  .rf-back{background:#F0F4FF;border:1.5px solid #C8D5EF;color:#4A5568;padding:8px 16px;border-radius:8px;cursor:pointer;font:800 .82rem inherit}
+  .rf-title{font-size:1.1rem;font-weight:900;flex:1}
+  .rf-body{padding:20px 28px 80px;display:flex;flex-direction:column;gap:18px;max-width:1500px;margin:0 auto}
+  .rf-panel{background:#fff;border:1.5px solid #E2E8F5;border-radius:16px;padding:18px 20px;box-shadow:0 1px 8px rgba(37,99,235,.05)}
+  .rf-ph{font-size:.84rem;font-weight:900;margin-bottom:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .rf-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:12px}
+  .rf-card{background:#fff;border:1.5px solid #E2E8F5;border-radius:12px;padding:12px 14px}
+  .rf-card-l{font-size:.64rem;font-weight:800;color:#8A9BB5;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px}
+  .rf-card-v{font-size:1.3rem;font-weight:900;font-family:'JetBrains Mono',monospace}
+  .rf-card-s{font-size:.66rem;color:#8A9BB5;margin-top:3px}
+  .rf-bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .rf-bar label{font-size:.68rem;font-weight:800;color:#8A9BB5;text-transform:uppercase}
+  .rf-bar input{background:#F8FAFF;border:1.5px solid #C8D5EF;color:#1A2340;padding:7px 10px;border-radius:8px;font:.8rem 'JetBrains Mono',monospace;outline:none}
+  .rf-btn{padding:8px 16px;border-radius:8px;border:1.5px solid #C8D5EF;background:#F0F4FF;color:#4A5568;font:800 .78rem inherit;cursor:pointer}
+  .rf-btn.p{background:#2563EB;border-color:#2563EB;color:#fff}.rf-btn.g{background:#F0FDF4;border-color:#BBF7D0;color:#059669}
+  .rf-msg{font-size:.76rem;font-weight:800;min-height:1.2em;margin-top:8px}
+  .rf-msg.err{color:#DC2626}.rf-msg.ok{color:#059669}
+  .rf-chartwrap{position:relative;height:260px;margin-top:14px}
+  .rf-empty{text-align:center;padding:34px 12px;color:#8A9BB5;font-size:.84rem;font-style:italic}
+  .rf-scroll{overflow-x:auto;border:1.5px solid #E2E8F5;border-radius:10px;margin-top:14px}
+  .rf-t{width:100%;min-width:900px;border-collapse:collapse;font-size:.74rem}
+  .rf-t th{background:#1A2340;color:#fff;padding:8px 10px;text-align:left;font-size:.62rem;text-transform:uppercase;letter-spacing:.06em;white-space:nowrap}
+  .rf-t td{padding:8px 10px;border-bottom:1px solid #F0F4FF;white-space:nowrap}
+  .rf-t tr:nth-child(even) td{background:#F8FAFF}
+  .rf-mono{font-family:'JetBrains Mono',monospace}.rf-add{font-weight:900;color:#059669}
+  .rf-b{font-size:.6rem;font-weight:800;padding:2px 8px;border-radius:12px;white-space:nowrap}
+  .rf-b-below{background:#FEF3C7;color:#92400E}.rf-b-within{background:#D1FAE5;color:#065F46}.rf-b-above{background:#DBEAFE;color:#1E40AF}
+  .rf-b-conf{background:#D1FAE5;color:#065F46}.rf-b-leg{background:#E5E7EB;color:#374151}.rf-b-pend{background:#FEF3C7;color:#92400E}.rf-b-rej{background:#FEE2E2;color:#991B1B}
+  .rf-grid2{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px}
+  .rf-f label{display:block;font-size:.64rem;font-weight:800;color:#6B7280;text-transform:uppercase;margin-bottom:4px}
+  .rf-f input{width:100%;box-sizing:border-box;padding:8px 10px;border:1.5px solid #C8D5EF;border-radius:8px;font:700 .85rem 'JetBrains Mono',monospace;background:#F8FAFF;outline:none}
+  .rf-f small{display:block;font-size:.6rem;color:#8A9BB5;margin-top:3px}
+  .rf-sec{font-size:.7rem;font-weight:900;color:#8A9BB5;text-transform:uppercase;letter-spacing:.08em;margin:14px 0 8px}
+  @media(max-width:700px){.rf-top,.rf-body{padding-left:14px;padding-right:14px}}
   `;
+  document.head.appendChild(st);
 
-  const styleEl = document.createElement('style');
-  styleEl.textContent = STYLE;
-  document.head.appendChild(styleEl);
-
-  // ── State ────────────────────────────────────────────────────
-  let refillRecords = [];
-  let pendingRefill = null;
-  let refillChart   = null;
-  let thresholdL = 30; // fallback until settings load
-  fetch('/api/settings').then(r => r.json()).then(s => { if (s.refillThresholdL) thresholdL = s.refillThresholdL; }).catch(()=>{});
-
-  const QUICK_NAMES = ['Naveen', 'Ravi', 'Suresh', 'Kumar', 'Contractor'];
-
-  // ── Popup ────────────────────────────────────────────────────
-  const popupEl = document.createElement('div');
-  popupEl.id = 'refillPopupOverlay';
-  popupEl.innerHTML = `
+  // ── Popup ─────────────────────────────────────────────────────
+  const popup = document.createElement('div');
+  popup.id = 'refillPopupOverlay';
+  popup.innerHTML = `
     <div class="rp-box">
-      <div class="rp-head">
-        <div class="rp-icon">⛽</div>
-        <div class="rp-head-text">
-          <div class="rp-title">🚨 Refill Detected!</div>
-          <div class="rp-subtitle" id="rpSubtitle">Fuel level jumped — recording refill event</div>
-        </div>
-      </div>
+      <div class="rp-head"><div class="rp-icon">⛽</div>
+        <div><div class="rp-title">Possible refill detected</div><div class="rp-subtitle" id="rpSub"></div></div></div>
       <div class="rp-body">
         <div class="rp-stats">
-          <div class="rp-stat">
-            <div class="rp-stat-icon">📉</div>
-            <div class="rp-stat-val" id="rpBefore">—</div>
-            <div class="rp-stat-lbl">Before (L)</div>
-          </div>
-          <div class="rp-stat">
-            <div class="rp-stat-icon">📈</div>
-            <div class="rp-stat-val" id="rpAfter">—</div>
-            <div class="rp-stat-lbl">After (L)</div>
-          </div>
-          <div class="rp-stat">
-            <div class="rp-stat-icon">📊</div>
-            <div class="rp-stat-val" id="rpPct">—</div>
-            <div class="rp-stat-lbl">Level Now</div>
+          <div class="rp-stat"><div class="rp-stat-val" id="rpBefore">—</div><div class="rp-stat-lbl">Previous (L)</div></div>
+          <div class="rp-stat"><div class="rp-stat-val" id="rpAfter">—</div><div class="rp-stat-lbl">Now (L)</div></div>
+          <div class="rp-stat"><div class="rp-stat-val" id="rpInc">—</div><div class="rp-stat-lbl">Increase (L)</div></div>
+        </div>
+        <div class="rp-meta" id="rpMeta"></div>
+        <div id="rpMain">
+          <div class="rp-lbl">👤 Who refilled? (optional)</div>
+          <input class="rp-input" id="rpPerson" maxlength="60" placeholder="Name" autocomplete="off">
+          <div class="rp-err" id="rpErr1" style="margin-top:6px"></div>
+          <div class="rp-actions" style="margin-top:6px">
+            <button class="rp-btn rp-later" id="rpLater">Decide later</button>
+            <button class="rp-btn rp-no" id="rpNo">❌ No Refill</button>
+            <button class="rp-btn rp-yes" id="rpYes">✅ Refill</button>
           </div>
         </div>
-        <div class="rp-added-banner">
-          <div class="rp-added-num" id="rpAdded">—</div>
-          <div class="rp-added-lbl">Litres Added to Tank</div>
-        </div>
-        <div>
-          <div class="rp-person-lbl">👤 Who refilled the tank?</div>
-          <input type="text" class="rp-person-input" id="rpPersonInput"
-            placeholder="Enter name or select below…" autocomplete="off">
-          <div class="rp-quick-names" id="rpQuickNames">
-            ${QUICK_NAMES.map(n => `<button class="rp-qname" data-name="${n}">${n}</button>`).join('')}
-            <button class="rp-qname" data-name="Auto-detected">Skip / Auto</button>
+        <div id="rpPw" style="display:none">
+          <div class="rp-note">Password required to classify this as <b>No Refill</b>.</div>
+          <input class="rp-input" id="rpPass" type="password" placeholder="Password" autocomplete="off" style="margin-top:10px">
+          <div class="rp-err" id="rpErr2" style="margin-top:6px"></div>
+          <div class="rp-actions" style="margin-top:6px">
+            <button class="rp-btn rp-later" id="rpBack">Back</button>
+            <button class="rp-btn rp-no" id="rpNoOk">Confirm No Refill</button>
           </div>
         </div>
       </div>
-      <div class="rp-footer">
-        <button class="rp-btn-skip" id="rpSkipBtn">Skip</button>
-        <button class="rp-btn-confirm" id="rpConfirmBtn">✅ Save Refill Record</button>
-      </div>
-    </div>
-  `;
-  document.body.appendChild(popupEl);
+    </div>`;
+  document.body.appendChild(popup);
+  const toast = document.createElement('div'); toast.id = 'refillToast'; document.body.appendChild(toast);
+  let _tt = null;
+  function showToast(m) { toast.textContent = m; toast.style.display = 'block'; clearTimeout(_tt); _tt = setTimeout(() => { toast.style.display = 'none'; }, 3500); }
 
-  // ── Toast ────────────────────────────────────────────────────
-  const toastEl = document.createElement('div');
-  toastEl.id = 'refillToast';
-  toastEl.innerHTML = `
-    <div class="rt-toast-title">⛽ Refill Detected!</div>
-    <div class="rt-toast-body" id="refillToastBody">—</div>
-    <button class="rt-toast-btn" id="refillToastBtn">👤 Add Name & View Details</button>
-  `;
-  document.body.appendChild(toastEl);
+  function setBusy(b) { busy = b; ['rpYes', 'rpNo', 'rpNoOk', 'rpLater', 'rpBack'].forEach(id => { const e = $(id); if (e) e.disabled = b; }); }
 
-  // ── Popup wiring ─────────────────────────────────────────────
-  document.getElementById('rpConfirmBtn').addEventListener('click', () => {
-    savePerson(document.getElementById('rpPersonInput').value.trim() || 'Unknown');
-  });
-  document.getElementById('rpSkipBtn').addEventListener('click', () => {
-    savePerson('Auto-detected');
-  });
-  document.getElementById('rpQuickNames').addEventListener('click', e => {
-    const btn = e.target.closest('.rp-qname');
-    if (!btn) return;
-    document.getElementById('rpPersonInput').value = btn.dataset.name;
-    document.querySelectorAll('.rp-qname').forEach(b => b.classList.remove('selected'));
-    btn.classList.add('selected');
-  });
-  document.getElementById('refillToastBtn').addEventListener('click', () => {
-    hideToast();
-    if (pendingRefill) showPopup(pendingRefill);
-  });
-
-  function showPopup(record) {
-    pendingRefill = record;
-    document.getElementById('rpBefore').textContent  = record.beforeL;
-    document.getElementById('rpAfter').textContent   = record.afterL;
-    document.getElementById('rpAdded').textContent   = '+' + record.addedL + ' L';
-    document.getElementById('rpPct').textContent     = record.afterPct + '%';
-    document.getElementById('rpSubtitle').textContent =
-      new Date(record.time).toLocaleTimeString('en-IN', {hour12:true}) + ' — +' + record.addedL + 'L';
-    document.getElementById('rpPersonInput').value = '';
-    document.querySelectorAll('.rp-qname').forEach(b => b.classList.remove('selected'));
-    popupEl.classList.add('open');
+  function renderPopup() {
+    const c = current; if (!c) return;
+    $('rpSub').textContent = `${fDate(c.detectedAt)} · ${fTime(c.detectedAt)}`;
+    $('rpBefore').textContent = c.beforeL; $('rpAfter').textContent = c.afterL; $('rpInc').textContent = '+' + c.increaseL;
+    $('rpMeta').innerHTML = `Detected: <b>${fDate(c.detectedAt)} ${fTime(c.detectedAt)}</b><br>DG status: <b>${esc(c.dgStatus || 'Unknown')}</b><br>${badge(c.increaseL)}` +
+      (queue.length > 1 ? `<br><span style="color:#92400E">${queue.length - 1} more event(s) waiting</span>` : '');
+    $('rpPerson').value = ''; $('rpPass').value = ''; $('rpErr1').textContent = ''; $('rpErr2').textContent = '';
+    $('rpMain').style.display = ''; $('rpPw').style.display = 'none';
+    setBusy(false); popup.classList.add('open');
   }
-  function hidePopup() { popupEl.classList.remove('open'); }
-
-  function savePerson(name) {
-    if (!pendingRefill) { hidePopup(); return; }
-    const rec = refillRecords.find(r => r.id === pendingRefill.id);
-    if (rec) { rec.person = name; rec.auto = false; }
-    if (pendingRefill.id) {
-      fetch(`/api/refills/${pendingRefill.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ person: name })
-      }).catch(e => console.warn('[Refill] PATCH error:', e));
-    }
-    pendingRefill.person = name;
-    hidePopup();
-    renderRefillCard();
+  function showNext(force) {
+    if (current) return;
+    const c = queue.find(x => force || !snoozed.has(x.id));
+    if (!c) { popup.classList.remove('open'); return; }
+    current = c; renderPopup();
+  }
+  function closePopup() { current = null; popup.classList.remove('open'); }
+  function dropFromQueue(id) { queue = queue.filter(x => x.id !== id); updateBadge(); if (current && current.id === id) closePopup(); }
+  function updateBadge() {
+    const b = $('refillHdrBadge'); if (!b) return;
+    b.style.display = queue.length ? 'grid' : 'none'; b.textContent = queue.length;
+    const chip = $('rfPendChip'); if (chip) { chip.style.display = queue.length ? '' : 'none'; chip.innerHTML = `<span class="rf-b rf-b-pend">${queue.length} pending decision(s)</span>`; }
   }
 
-  // ── Toast ────────────────────────────────────────────────────
-  let _toastTimer = null;
-  function showToast(record) {
-    document.getElementById('refillToastBody').innerHTML =
-      `<strong>+${record.addedL} L</strong> added at ` +
-      new Date(record.time).toLocaleTimeString('en-IN', {hour12:true}) +
-      `<br>${record.beforeL}L → ${record.afterL}L &nbsp;|&nbsp; Tank: ${record.afterPct}% full`;
-    toastEl.style.display = 'block';
-    if (_toastTimer) clearTimeout(_toastTimer);
-    _toastTimer = setTimeout(hideToast, 12000);
-  }
-  function hideToast() { toastEl.style.display = 'none'; }
-
-  // ── Fetch from server ────────────────────────────────────────
-  async function loadRefills() {
-    try {
-      const r = await fetch('/api/refills');
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      refillRecords = await r.json();
-      renderRefillCard();
-    } catch(e) {
-      console.warn('[Refill] Load error:', e.message);
-    }
-  }
-
-  // ── Inject card into Fuel section ────────────────────────────
-  function injectRefillCard() {
-    const fuelSection = Array.from(document.querySelectorAll('section.section'))
-      .find(s => s.querySelector('.fuel-tag'));
-    if (!fuelSection) return;
-    if (document.getElementById('refillTrackerCard')) return;
-
-    const cardRow = fuelSection.querySelector('.card-row.fuel-detail-row');
-    if (!cardRow) return;
-
-  const wrapper = document.createElement('div');
-wrapper.style.cssText = 'grid-column:1/-1;width:100%;max-width:100%;box-sizing:border-box;overflow:hidden;cursor:pointer;';
-wrapper.addEventListener('click', (e) => {
-  e.stopPropagation();                    // don't let this open the Fuel overlay
-  if (e.target.closest('button')) return; // let Refresh/Manual buttons work normally
-  toggleRefillDetail();                   // opens the refill-specific detail view
-});
-    wrapper.innerHTML = `
-      <div class="refill-tracker-card" id="refillTrackerCard">
-
-        <div class="rtc-header">
-          <div class="rtc-title-row">
-            <div class="rtc-title">
-              ⛽ Refill History &amp; Tracker
-              <span class="rtc-badge" id="rtcBadge">0 refills</span>
-            </div>
-            <span class="rtc-chevron" id="rtcChevron">▾</span>
-          </div>
-          
-          <div class="rtc-actions">
-            <button class="rtc-btn green" id="rtcManualBtn">➕ Manual</button>
-            <button class="rtc-btn" id="rtcRefreshBtn">🔄 Refresh</button>
-          </div>
-        </div>
-
-        <!-- Summary — 2-col on mobile, 4-col on desktop -->
-        <div class="rtc-summary">
-          <div class="rtc-sum-item">
-            <div class="rtc-sum-lbl">Total Refills</div>
-            <div class="rtc-sum-val" id="rtcTotalCount">—</div>
-            <div class="rtc-sum-sub">all time</div>
-          </div>
-          <div class="rtc-sum-item">
-            <div class="rtc-sum-lbl">Total Added</div>
-            <div class="rtc-sum-val" id="rtcTotalL">— L</div>
-            <div class="rtc-sum-sub">cumulative</div>
-          </div>
-          <div class="rtc-sum-item">
-            <div class="rtc-sum-lbl">Last Refill</div>
-            <div class="rtc-sum-val" id="rtcLastAdded">— L</div>
-            <div class="rtc-sum-sub" id="rtcLastTime">—</div>
-          </div>
-          <div class="rtc-sum-item">
-            <div class="rtc-sum-lbl">Avg / Refill</div>
-            <div class="rtc-sum-val" id="rtcAvgL">— L</div>
-            <div class="rtc-sum-sub">litres</div>
-          </div>
-        </div>
-
-        <!-- Chart -->
-        <div class="rtc-chart-wrap">
-          <canvas id="refillChart"></canvas>
-        </div>
-
-        <!-- Table with horizontal scroll on small screens -->
-        <div class="rtc-table-wrap">
-          <table class="rtc-table">
-            <thead>
-              <tr>
-                <th>📅 Date &amp; Time</th>
-                <th>Before (L)</th>
-                <th>After (L)</th>
-                <th>➕ Added</th>
-                <th>Before %</th>
-                <th>After %</th>
-                <th>👤 Person</th>
-                <th>Source</th>
-              </tr>
-            </thead>
-            <tbody id="refillTableBody">
-              <tr><td colspan="8" class="rtc-empty">Loading…</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    `;
-    cardRow.appendChild(wrapper);
-
-    document.getElementById('rtcRefreshBtn').addEventListener('click', loadRefills);
-    document.getElementById('rtcManualBtn').addEventListener('click', showManualEntry);
-    buildRefillChart();
-  }
-
-  // ── Chart ────────────────────────────────────────────────────
-  function buildRefillChart() {
-    const canvas = document.getElementById('refillChart');
-    if (!canvas) return;
-    if (refillChart) { refillChart.destroy(); refillChart = null; }
-
-    const sorted = [...refillRecords].sort((a, b) => new Date(a.time) - new Date(b.time));
-    const labels = sorted.map(r => {
-      const d = new Date(r.time);
-      return d.toLocaleDateString('en-IN', { day:'2-digit', month:'short' });
-    });
-
-    refillChart = new Chart(canvas.getContext('2d'), {
-      type: 'bar',
-      data: {
-        labels,
-        datasets: [
-          {
-            label: 'Litres Added',
-            data: sorted.map(r => r.addedL),
-            backgroundColor: sorted.map(r =>
-              r.addedL > 300 ? 'rgba(5,150,105,.85)' :
-              r.addedL > 150 ? 'rgba(37,99,235,.75)' : 'rgba(217,119,6,.75)'
-            ),
-            borderColor: sorted.map(r =>
-              r.addedL > 300 ? '#059669' : r.addedL > 150 ? '#2563EB' : '#D97706'
-            ),
-            borderWidth: 2, borderRadius: 5, yAxisID: 'yL'
-          },
-          {
-            label: 'Tank After (%)',
-            data: sorted.map(r => r.afterPct),
-            type: 'line',
-            borderColor: '#7C3AED',
-            backgroundColor: 'rgba(124,58,237,.08)',
-            borderWidth: 2, tension: 0.4, pointRadius: 4,
-            pointBackgroundColor: '#7C3AED', fill: false, yAxisID: 'yR'
-          }
-        ]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        animation: { duration: 400 },
-        interaction: { mode: 'index', intersect: false },
-        plugins: {
-          legend: {
-            position: 'bottom',
-            labels: {
-              font: { family: 'JetBrains Mono', size: 10 },
-              boxWidth: 10, padding: 10, color: '#4A5568'
-            }
-          },
-          tooltip: {
-            backgroundColor: '#1A2340',
-            titleColor: '#fff', bodyColor: '#CBD5E1',
-            bodyFont: { family: 'JetBrains Mono', size: 11 },
-            callbacks: {
-              afterBody(items) {
-                const r = sorted[items[0].dataIndex];
-                if (!r) return '';
-                return [`Before: ${r.beforeL}L (${r.beforePct}%)`,
-                        `After:  ${r.afterL}L (${r.afterPct}%)`,
-                        `Person: ${r.person}`];
-              }
-            }
-          }
-        },
-        scales: {
-          x: {
-            ticks: { font: { family: 'JetBrains Mono', size: 9 }, color: '#8A9BB5', maxRotation: 30 },
-            grid: { color: 'rgba(0,0,0,.04)' }
-          },
-          yL: {
-            position: 'left',
-            title: { display: true, text: 'Litres Added', color: '#8A9BB5', font: { size: 9 } },
-            ticks: { font: { family: 'JetBrains Mono', size: 9 }, color: '#8A9BB5' },
-            grid: { color: 'rgba(0,0,0,.04)' }
-          },
-          yR: {
-            position: 'right',
-            title: { display: true, text: 'Tank % After', color: '#8A9BB5', font: { size: 9 } },
-            min: 0, max: 100,
-            ticks: { font: { family: 'JetBrains Mono', size: 9 }, color: '#8A9BB5' },
-            grid: { drawOnChartArea: false }
-          }
-        }
-      }
-    });
-  }
-
-  // ── Render table + summary ────────────────────────────────────
-  function renderRefillCard() {
-    if (!document.getElementById('refillTrackerCard')) return;
-
-    const total  = refillRecords.length;
-    const totalL = refillRecords.reduce((s, r) => s + (r.addedL || 0), 0);
-    const avgL   = total > 0 ? Math.round(totalL / total) : 0;
-    const last   = refillRecords[0];
-
-    document.getElementById('rtcBadge').textContent      = total + ' refill' + (total !== 1 ? 's' : '');
-    document.getElementById('rtcTotalCount').textContent  = total;
-    document.getElementById('rtcTotalL').textContent      = totalL + ' L';
-    document.getElementById('rtcAvgL').textContent        = avgL + ' L';
-    if (last) {
-      document.getElementById('rtcLastAdded').textContent = '+' + last.addedL + ' L';
-      document.getElementById('rtcLastTime').textContent  =
-        new Date(last.time).toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' });
-    }
-
-    const tbody = document.getElementById('refillTableBody');
-    if (!tbody) return;
-
-    if (refillRecords.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="8" class="rtc-empty">
-        ⛽ No refill events recorded yet.<br>
-        The system auto-detects when fuel increases by ${thresholdL}+ litres.
-      </td></tr>`;
-    } else {
-      tbody.innerHTML = refillRecords.map(r => {
-        const dt      = new Date(r.time);
-        const dateStr = dt.toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' });
-        const timeStr = dt.toLocaleTimeString('en-IN', { hour:'2-digit', minute:'2-digit', hour12:true });
-        return `
-          <tr>
-            <td><strong>${dateStr}</strong><br>
-                <span style="font-size:.66rem;color:#8A9BB5">${timeStr}</span></td>
-            <td style="font-family:'JetBrains Mono',monospace">${r.beforeL} L</td>
-            <td style="font-family:'JetBrains Mono',monospace">${r.afterL} L</td>
-            <td class="rtc-added-cell">+${r.addedL} L</td>
-            <td style="color:#D97706;font-family:'JetBrains Mono',monospace">${r.beforePct}%</td>
-            <td style="color:#059669;font-family:'JetBrains Mono',monospace">${r.afterPct}%</td>
-            <td>
-              <div class="rtc-person-cell">
-                <span>${r.person || '—'}</span>
-                ${r.auto !== false ? '<span class="rtc-auto-badge">auto</span>' : ''}
-                <button class="rtc-person-edit"
-                  onclick="window._refillEditPerson('${r.id}')" title="Edit">✏️</button>
-              </div>
-            </td>
-            <td style="font-size:.64rem;color:#8A9BB5">${r.auto !== false ? 'Auto' : 'Manual'}</td>
-          </tr>`;
-      }).join('');
-    }
-
-    buildRefillChart();
-  }
-
-  // ── Edit person inline ────────────────────────────────────────
-  window._refillEditPerson = function(id) {
-    const rec = refillRecords.find(r => r.id === id);
-    if (!rec) return;
-    const name = prompt(`Edit person for refill of +${rec.addedL}L:`, rec.person || '');
-    if (name === null) return;
-    const trimmed = name.trim() || 'Unknown';
-    rec.person = trimmed; rec.auto = false;
-    fetch(`/api/refills/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ person: trimmed })
-    }).catch(e => console.warn('[Refill] PATCH error:', e));
-    renderRefillCard();
-  };
-
-  // ── Manual entry ──────────────────────────────────────────────
-  function showManualEntry() {
-    const before = prompt('Fuel level BEFORE refill (litres):');
-    if (before === null) return;
-    const after  = prompt('Fuel level AFTER refill (litres):');
-    if (after  === null) return;
-    const person = prompt('Who refilled? (name):') || 'Manual entry';
-
-    const beforeL = parseInt(before), afterL = parseInt(after);
-    if (isNaN(beforeL) || isNaN(afterL) || afterL <= beforeL) {
-      alert('Invalid. After must be greater than Before.');
-      return;
-    }
-    fetch('/api/refills', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ beforeL, afterL, person })
-    })
-    .then(r => r.json())
-    .then(data => {
-      if (data.ok && data.record) {
-        refillRecords.unshift(data.record);
-        renderRefillCard();
-      }
-    })
-    .catch(e => console.warn('[Refill] Manual entry error:', e));
-  }
-
-  // ── Socket.IO ─────────────────────────────────────────────────
-  function hookSocket() {
-    if (!window.io) return;
-    const _sock = io({ transports: ['websocket', 'polling'] });
-    _sock.on('refill:detected', function(record) {
-      console.log('[Refill] 🚨 Socket event:', record);
-      if (!refillRecords.find(r => r.id === record.id)) {
-        refillRecords.unshift(record);
-      }
-      showToast(record);
-      setTimeout(() => showPopup(record), 800);
-      renderRefillCard();
-    });
-  }
-
-  // ════════════════════════════════════════════════════════════
-  //  REFILL PREDICTION ENGINE
-  //  Rolling burn rate + forecasted refill date, not just a
-  //  raw "hours left" number — this is what makes it trustworthy.
-  // ════════════════════════════════════════════════════════════
-  const LOW_FUEL_PCT = 20; // the level we predict "next refill needed by"
-
-  function _parseClockSec(ts) {
-    const p = String(ts).split(':').map(Number);
-    return (p.length >= 3 && !p.some(isNaN)) ? p[0]*3600 + p[1]*60 + p[2] : null;
-  }
-
-let _burnCache = null; // { result, ts }
-  const BURN_CACHE_TTL_MS = 60000;
-
-  async function computeRollingBurn(hoursWindow = 6) {
-    if (_burnCache && (Date.now() - _burnCache.ts) < BURN_CACHE_TTL_MS) {
-      return _burnCache.result;
-    }
-
-    // Instant path: use whatever's already in memory (dayStore) first —
-    // no network wait. Only hit the server if dayStore is too thin.
-    let pctArr = (typeof dayStore !== 'undefined' && dayStore.fuelPct) ? dayStore.fuelPct : null;
-    let tsArr  = (typeof dayStore !== 'undefined' && dayStore.timestamps) ? dayStore.timestamps : null;
-
-    if (!pctArr || pctArr.length < 10) {
+  popup.addEventListener('click', async e => {
+    const id = e.target.id; if (!id || busy || !current) return;
+    const c = current;
+    if (id === 'rpLater') { snoozed.add(c.id); closePopup(); showNext(); }
+    else if (id === 'rpNo') { $('rpMain').style.display = 'none'; $('rpPw').style.display = ''; $('rpPass').focus(); }
+    else if (id === 'rpBack') { $('rpPw').style.display = 'none'; $('rpMain').style.display = ''; $('rpErr2').textContent = ''; }
+    else if (id === 'rpYes') {
+      setBusy(true); $('rpErr1').textContent = '';
       try {
-        const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-        const r = await fetch(`/api/history?from=${today}&to=${today}`);
-        if (r.ok) {
-          const json = await r.json();
-          if (json.fuelLevelPct && json.fuelLevelPct.length >= 5) {
-            pctArr = json.fuelLevelPct;
-            tsArr  = json.timestamps;
-          }
-        }
-      } catch (e) { /* keep whatever dayStore had, even if thin */ }
-    }
-
-    if (!pctArr) {
-      const result = { rate: 0, confidence: 'low', samples: 0 };
-      _burnCache = { result, ts: Date.now() };
-      return result;
-    }
-
-    const n = pctArr.length;
-    let totalConsumedL = 0, totalHrs = 0;
-    const rates = [];
-
-    for (let i = n - 1; i > 0; i--) {
-      const t1 = _parseClockSec(tsArr[i]), t0 = _parseClockSec(tsArr[i - 1]);
-      if (t1 === null || t0 === null) continue;
-      let dtSec = t1 - t0;
-      if (dtSec < 0) dtSec += 86400;
-      const dtHr = dtSec / 3600;
-      if (totalHrs + dtHr > hoursWindow) break;
-
-      const dPct = pctArr[i - 1] - pctArr[i];
-      if (dPct > 0 && dtHr > 0) {
-        const dL = dPct * TANK_CAPACITY / 100;
-        totalConsumedL += dL;
-        totalHrs += dtHr;
-        rates.push(dL / dtHr);
-      } else {
-        totalHrs += dtHr;
+        await post(`/api/refill-candidates/${c.id}/confirm`, { person: $('rpPerson').value.trim() });
+        showToast(`✅ Refill recorded: +${c.increaseL} L`);
+        dropFromQueue(c.id); afterChange(); showNext();
+      } catch (err) {
+        if (err.status === 409 || err.status === 404) { dropFromQueue(c.id); afterChange(); showToast('Already handled: ' + err.message); showNext(); }
+        else { $('rpErr1').textContent = err.message; setBusy(false); }
       }
     }
-
-    let result;
-    if (totalHrs < 0.25 || rates.length < 3) {
-      result = { rate: 0, confidence: 'low', samples: rates.length };
-    } else {
-      const rate = totalConsumedL / totalHrs;
-      const mean = rates.reduce((a,b) => a+b, 0) / rates.length;
-      const variance = rates.reduce((a,b) => a + (b-mean)**2, 0) / rates.length;
-      const cv = mean > 0 ? Math.sqrt(variance) / mean : 1;
-      const confidence = cv < 0.35 ? 'high' : cv < 0.7 ? 'medium' : 'low';
-      result = { rate: +rate.toFixed(2), confidence, samples: rates.length };
+    else if (id === 'rpNoOk') {
+      const pw = $('rpPass').value; if (!pw) { $('rpErr2').textContent = 'Enter the password'; return; }
+      setBusy(true); $('rpErr2').textContent = '';
+      try {
+        await post(`/api/refill-candidates/${c.id}/reject`, { password: pw });
+        $('rpPass').value = '';
+        showToast('Marked as No Refill'); dropFromQueue(c.id); afterChange(); showNext();
+      } catch (err) {
+        if (err.status === 409 || err.status === 404) { dropFromQueue(c.id); afterChange(); showNext(); }
+        else { $('rpErr2').textContent = err.message; $('rpPass').value = ''; setBusy(false); $('rpPass').focus(); }
+      }
     }
+  });
+  popup.addEventListener('keydown', e => { if (e.key === 'Enter' && $('rpPw').style.display !== 'none') $('rpNoOk').click(); });
 
-    _burnCache = { result, ts: Date.now() };
-    return result;
+  async function loadPending() {
+    try {
+      const list = await api('/api/refill-candidates?status=pending');
+      queue = list.filter(c => c.increaseL >= MIN_REFILL_L)
+                  .sort((a, b) => a.detectedAt.localeCompare(b.detectedAt));
+                        if (current && !queue.find(x => x.id === current.id)) closePopup();
+      updateBadge(); showNext();
+    } catch (e) { /* offline: try again on next poll */ }
   }
 
-  async function computePrediction() {
-    const currentPct = (typeof dayStore !== 'undefined' && dayStore.fuelPct?.length)
-      ? dayStore.fuelPct[dayStore.fuelPct.length - 1] : null;
-    if (currentPct === null) return null;
+  // ── Details page ──────────────────────────────────────────────
+  const ov = document.createElement('div'); ov.id = 'refillOverlay';
+  ov.innerHTML = `
+    <div class="rf-top"><button class="rf-back" id="rfBack">← Back</button>
+      <span class="rf-title">⛽ Refill History &amp; Tracker</span><span id="rfPendChip" style="display:none"></span></div>
+    <div class="rf-body">
+      <div class="rf-cards" id="rfCards"></div>
+      <div class="rf-panel" id="rfPred"></div>
+      <div class="rf-panel">
+        <div class="rf-ph">📅 Refill history <span style="flex:1"></span>
+          <button class="rf-btn g" id="rfManual">➕ Manual entry</button></div>
+        <div class="rf-bar">
+          <label>From</label><input type="datetime-local" id="rfFrom">
+          <label>To</label><input type="datetime-local" id="rfTo">
+          <button class="rf-btn p" id="rfFetch">⬇ Fetch</button><button class="rf-btn" id="rfReset">Reset</button>
+        </div>
+        <div class="rf-msg" id="rfMsg"></div>
+        <div id="rfChartBox"><div class="rf-chartwrap"><canvas id="rfChart"></canvas></div></div>
+        <div id="rfTable"></div>
+      </div>
+    </div>`;
+  document.body.appendChild(ov);
 
-    const currentL = Math.round(currentPct * TANK_CAPACITY / 100);
-    const { rate, confidence, samples } = await computeRollingBurn(6);
+  function openPage() {
+    ov.classList.add('open'); document.body.style.overflow = 'hidden';
+    if (queue.length) { snoozed.clear(); showNext(true); }
+    resetFilters(false); loadAll();
+  }
+  function closePage() { ov.classList.remove('open'); document.body.style.overflow = ''; }
+  function resetFilters(fetchNow) {
+    const now = new Date(), from = new Date(now.getTime() - 30 * 86400000);
+    $('rfFrom').value = dtToInput(from).slice(0, 10) + 'T00:00'; $('rfTo').value = dtToInput(now);
+    $('rfMsg').textContent = ''; if (fetchNow) loadAll();
+  }
+  function msg(t, kind) { const m = $('rfMsg'); m.textContent = t || ''; m.className = 'rf-msg ' + (kind || ''); }
+  function afterChange() { if (ov.classList.contains('open')) loadAll(); }
 
-    if (rate <= 0) {
-      return { currentL, currentPct, rate: 0, confidence: 'low', samples, hoursToLow: null, etaDate: null };
-    }
-
-    const lowL = LOW_FUEL_PCT * TANK_CAPACITY / 100;
-    const litresUntilLow = Math.max(0, currentL - lowL);
-    const hoursToLow = litresUntilLow / rate;
-    const etaDate = new Date(Date.now() + hoursToLow * 3600 * 1000);
-
-    return { currentL, currentPct, rate, confidence, samples, hoursToLow, etaDate };
+  async function loadAll() {
+    const f = $('rfFrom').value, t = $('rfTo').value;
+    if (!f || !t) return msg('Select both From and To.', 'err');
+    if (f > t) return msg('"From" must not be later than "To".', 'err');
+    msg('Loading…');
+    $('rfTable').innerHTML = '<div class="rf-empty">Loading…</div>';
+    const q = `from=${encodeURIComponent(inputToIso(f))}&to=${encodeURIComponent(inputToIso(t, true))}`;
+    try {
+            const [recs, s] = await Promise.all([
+        api('/api/refills?' + q), api('/api/refill-settings')
+      ]);
+      settings = s; confirmed = recs;
+      msg('');
+      renderCards(); renderTable(); renderChart(); renderPred();
+    } catch (e) { msg('Could not load: ' + e.message, 'err'); $('rfTable').innerHTML = ''; }
   }
 
-  function confidenceBadge(level) {
-    const map = {
-      high:   { color: '#059669', bg: '#ECFDF5', label: '● High confidence' },
-      medium: { color: '#D97706', bg: '#FEF3C7', label: '◐ Medium confidence' },
-      low:    { color: '#8A9BB5', bg: '#F1F5F9', label: '○ Low confidence — need more data' }
-    };
-    const c = map[level] || map.low;
-    return `<span style="font-size:.62rem;font-weight:800;color:${c.color};background:${c.bg};padding:2px 8px;border-radius:20px;white-space:nowrap">${c.label}</span>`;
+  function renderCards() {
+    const tot = confirmed.reduce((s, r) => s + (r.addedL || 0), 0), n = confirmed.length;
+    const last = confirmed[0];
+    const card = (l, v, s, c) => `<div class="rf-card"><div class="rf-card-l">${l}</div><div class="rf-card-v" style="color:${c || '#1A2340'}">${v}</div><div class="rf-card-s">${s || ''}</div></div>`;
+    $('rfCards').innerHTML =
+      card('Refills (period)', n, 'confirmed only') + card('Total added', tot + ' L', 'confirmed only', '#059669') +
+      card('Average / refill', (n ? Math.round(tot / n) : 0) + ' L', '') +
+      card('Latest refill', last ? '+' + last.addedL + ' L' : '—', last ? fDate(last.time) + ' ' + fTime(last.time) : 'none in period') +
+      card('Pending decisions', queue.length, 'awaiting your answer', queue.length ? '#D97706' : '#1A2340');
   }
 
-  function fmtEta(etaDate, hoursToLow) {
-    if (!etaDate) return { big: '—', sub: 'Not enough data yet' };
-    const now = new Date();
-    const sameDay = etaDate.toDateString() === now.toDateString();
-    const tomorrow = new Date(now); tomorrow.setDate(now.getDate() + 1);
-    const isTomorrow = etaDate.toDateString() === tomorrow.toDateString();
-    const timeStr = etaDate.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
-    const dayStr = sameDay ? 'Today' : isTomorrow ? 'Tomorrow' : etaDate.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
-    const hrsRound = Math.round(hoursToLow);
-    return { big: `${dayStr}, ${timeStr}`, sub: `≈ ${hrsRound} hour${hrsRound !== 1 ? 's' : ''} from now` };
+  function renderTable() {
+    if (!confirmed.length) { $('rfTable').innerHTML = '<div class="rf-empty">⛽ No confirmed refills in the selected period.</div>'; return; }
+    $('rfTable').innerHTML = `<div class="rf-scroll"><table class="rf-t"><thead><tr>
+      <th>Event ID</th><th>Date</th><th>Time</th><th>Before (L)</th><th>After (L)</th><th>Added</th><th>Range</th><th>DG status</th><th>Status</th><th>Confirmed at</th><th>Person</th></tr></thead><tbody>` +
+      confirmed.map(r => `<tr>
+        <td class="rf-mono">${esc(String(r.id).slice(-6))}</td><td><b>${fDate(r.time)}</b></td><td>${fTime(r.time)}</td>
+        <td class="rf-mono">${r.beforeL}</td><td class="rf-mono">${r.afterL}</td><td class="rf-mono rf-add">+${r.addedL} L</td>
+        <td>${badge(r.addedL)}</td><td>${esc(r.dgStatus || '—')}</td>
+        <td>${r.legacy ? '<span class="rf-b rf-b-leg">Legacy (auto-saved)</span>' : '<span class="rf-b rf-b-conf">Confirmed</span>'}</td>
+        <td>${r.confirmedAt ? fDate(r.confirmedAt) + ' ' + fTime(r.confirmedAt) : '—'}</td>
+        <td>${esc(r.person)} <button data-edit="${esc(r.id)}" title="Edit" style="border:none;background:none;cursor:pointer">✏️</button></td></tr>`).join('') +
+      '</tbody></table></div>';
   }
 
-  // Tiny inline sparkline (last ~40 pct readings) — no chart lib needed
-  function buildSparkline(values, w = 240, h = 40, color = '#059669') {
-    if (!values || values.length < 2) return `<svg width="${w}" height="${h}"></svg>`;
-    const min = Math.min(...values), max = Math.max(...values);
-    const range = (max - min) || 1;
-    const step = w / (values.length - 1);
-    const pts = values.map((v, i) => `${(i*step).toFixed(1)},${(h - ((v-min)/range)*h).toFixed(1)}`).join(' ');
-    return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
-      <polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-    </svg>`;
-  }
-
-  // ── Detail panel (expands in place under the card) ─────────────
-  let detailOpen = false;
-
-  function toggleRefillDetail() {
-    const card = document.getElementById('refillTrackerCard');
-    if (!card) return;
-    let panel = document.getElementById('refillDetailPanel');
-    if (detailOpen) {
-      if (panel) panel.remove();
-      detailOpen = false;
-      const chev = document.getElementById('rtcChevron');
-      if (chev) chev.textContent = '▾';
-      return;
-    }
-    panel = document.createElement('div');
-    panel.id = 'refillDetailPanel';
-    panel.innerHTML = `<div class="rtc-detail"><div class="rtc-empty">Calculating prediction…</div></div>`;
-    card.appendChild(panel);
-    detailOpen = true;
-    const chev = document.getElementById('rtcChevron');
-    if (chev) chev.textContent = '▴';
-
-    buildRefillDetailHTML().then(html => {
-      const p = document.getElementById('refillDetailPanel');
-      if (p) p.innerHTML = html;
+  function renderChart() {
+    if (chart) { chart.destroy(); chart = null; }
+    const box = $('rfChartBox');
+    if (!confirmed.length) { box.style.display = 'none'; return; }
+    box.style.display = '';
+    const rows = [...confirmed].sort((a, b) => a.time.localeCompare(b.time));
+    chart = new Chart($('rfChart').getContext('2d'), {
+      type: 'bar',
+      data: { labels: rows.map(r => fDate(r.time).slice(0, 6) + ' ' + fTime(r.time)),
+        datasets: [{ label: 'Litres added', data: rows.map(r => r.addedL), backgroundColor: 'rgba(5,150,105,.8)', borderColor: '#059669', borderWidth: 1.5, borderRadius: 5 }] },
+      options: { responsive: true, maintainAspectRatio: false, animation: { duration: 300 },
+        plugins: { legend: { position: 'bottom' }, tooltip: { callbacks: {
+          title: it => { const r = rows[it[0].dataIndex]; return fDate(r.time) + ' ' + fTime(r.time); },
+          afterBody: it => { const r = rows[it[0].dataIndex]; return [`Before: ${r.beforeL} L (${r.beforePct}%)`, `After: ${r.afterL} L (${r.afterPct}%)`, `By: ${r.person}`]; } } } },
+        scales: { y: { beginAtZero: true, title: { display: true, text: 'Litres added' } }, x: { ticks: { maxRotation: 40 } } } }
     });
   }
 
-  async function buildRefillDetailHTML() {
-    const pred = await computePrediction();
-    const spark = (typeof dayStore !== 'undefined' && dayStore.fuelPct)
-      ? dayStore.fuelPct.slice(-40) : [];
-
-    if (!pred) {
-      return `<div class="rtc-detail"><div class="rtc-empty">No live fuel data yet.</div></div>`;
+  // Next-refill estimate from live in-memory readings (dayStore from app.js)
+  function renderPred() {
+    const el = $('rfPred');
+    const ds = (typeof dayStore !== 'undefined') ? dayStore : null;
+    if (!ds || !ds.fuelPct || ds.fuelPct.length < 10) { el.innerHTML = '<div class="rf-ph">🔮 Next refill estimate</div><div class="rf-empty" style="padding:10px">Collecting live readings…</div>'; return; }
+    const sec = s => { const p = String(s).split(':').map(Number); return p.length >= 3 && !p.some(isNaN) ? p[0] * 3600 + p[1] * 60 + p[2] : null; };
+    const n = ds.fuelPct.length; let drop = 0, hrs = 0;
+    for (let i = n - 1; i > 0 && hrs < 6; i--) {
+      const a = sec(ds.timestamps[i - 1]), b = sec(ds.timestamps[i]); if (a == null || b == null) continue;
+      let dt = b - a; if (dt < 0) dt += 86400; hrs += dt / 3600;
+      const d = ds.fuelPct[i - 1] - ds.fuelPct[i]; if (d > 0) drop += d * settings.tankCapacityL / 100;   // rises are ignored, never negative burn
     }
-
-    const eta = fmtEta(pred.etaDate, pred.hoursToLow);
-    const levelColor = pred.currentPct > 50 ? '#059669' : pred.currentPct > 25 ? '#D97706' : '#DC2626';
-
-    // Per-refill interval stats (days between refills)
-    const sorted = [...refillRecords].sort((a,b) => new Date(a.time) - new Date(b.time));
-    let avgIntervalDays = null;
-    if (sorted.length >= 2) {
-      const spans = [];
-      for (let i = 1; i < sorted.length; i++) {
-        spans.push((new Date(sorted[i].time) - new Date(sorted[i-1].time)) / 86400000);
-      }
-      avgIntervalDays = (spans.reduce((a,b)=>a+b,0) / spans.length).toFixed(1);
+    const curL = Math.round(ds.fuelPct[n - 1] * settings.tankCapacityL / 100), lowL = 0.2 * settings.tankCapacityL;
+    const rate = hrs > 0.25 ? drop / hrs : 0;
+    let big = '—', sub = 'Not enough burn data yet (engine idle?)';
+    if (rate > 0.5) {
+      const h = Math.max(0, curL - lowL) / rate, eta = new Date(Date.now() + h * 3600e3);
+      big = eta.toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: true, timeZone: TZ });
+      sub = `≈ ${Math.round(h)} h from now · burn ${rate.toFixed(1)} L/h · level reaches 20%`;
     }
+    el.innerHTML = `<div class="rf-ph">🔮 Next refill estimate</div><div style="font:900 1.3rem 'JetBrains Mono',monospace">${big}</div><div class="rf-card-s">${sub}</div>`;
+  }
 
-    return `
-      <div class="rtc-detail">
+    // ── Page events ───────────────────────────────────────────────
+  ov.addEventListener('click', async e => {
+    const t = e.target;
+    if (t.id === 'rfBack') closePage();
+    else if (t.id === 'rfFetch') loadAll();
+    else if (t.id === 'rfReset') resetFilters(true);
+    else if (t.id === 'rfManual') manualEntry();
+    else if (t.dataset && t.dataset.edit) editPerson(t.dataset.edit);
+  });
 
-        <div class="rtc-detail-grid">
-
-          <!-- Prediction card -->
-          <div class="rtc-pred-card">
-            <div class="rtc-pred-head">
-              <span class="rtc-pred-icon">🔮</span>
-              <span class="rtc-pred-title">Next Refill Predicted</span>
-              ${confidenceBadge(pred.confidence)}
-            </div>
-            <div class="rtc-pred-eta">${eta.big}</div>
-            <div class="rtc-pred-sub">${eta.sub}</div>
-            <div class="rtc-pred-meta">
-              Based on rolling burn rate over last 6h${pred.samples ? ` (${pred.samples} samples)` : ''}.
-              Triggers when tank reaches ${LOW_FUEL_PCT}%.
-            </div>
-          </div>
-
-          <!-- Burn rate + level -->
-          <div class="rtc-mini-stats">
-            <div class="rtc-mini">
-              <div class="rtc-mini-lbl">🔥 Rolling Burn Rate</div>
-              <div class="rtc-mini-val">${pred.rate > 0 ? pred.rate.toFixed(1) : '—'} <span>L/hr</span></div>
-            </div>
-            <div class="rtc-mini">
-              <div class="rtc-mini-lbl">⛽ Current Level</div>
-              <div class="rtc-mini-val" style="color:${levelColor}">${pred.currentPct}% <span>${pred.currentL} L</span></div>
-            </div>
-            <div class="rtc-mini">
-              <div class="rtc-mini-lbl">📅 Avg Days Between Refills</div>
-              <div class="rtc-mini-val">${avgIntervalDays ?? '—'} <span>${avgIntervalDays ? 'days' : ''}</span></div>
-            </div>
-          </div>
-
-        </div>
-
-        <!-- Sparkline -->
-        <div class="rtc-spark-wrap">
-          <div class="rtc-spark-lbl">📉 Fuel level trend (recent readings)</div>
-          ${buildSparkline(spark, 600, 46, levelColor)}
-        </div>
-
-      </div>`;
+  async function manualEntry() {
+    const b = prompt('Fuel level BEFORE refill (litres):'); if (b === null) return;
+    const a = prompt('Fuel level AFTER refill (litres):'); if (a === null) return;
+    const person = prompt('Who refilled? (name):') || 'Manual entry';
+    const beforeL = parseInt(b, 10), afterL = parseInt(a, 10);
+    if (isNaN(beforeL) || isNaN(afterL) || afterL <= beforeL) return alert('Invalid: After must be greater than Before.');
+    if (afterL - beforeL < MIN_REFILL_L) return alert(`A refill must be at least ${MIN_REFILL_L} L.`);
+        try { await post('/api/refills', { beforeL, afterL, person }); showToast('✅ Manual refill saved'); loadAll(); }
+    catch (e) { alert(e.message); }
+  }
+  async function editPerson(id) {
+    const r = confirmed.find(x => x.id === id); if (!r) return;
+    const n = prompt(`Edit person for +${r.addedL} L refill:`, r.person || ''); if (n === null) return;
+    try { await api('/api/refills/' + id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ person: n.trim() || 'Unknown' }) }); loadAll(); }
+    catch (e) { alert(e.message); }
   }
 
   // ── Init ──────────────────────────────────────────────────────
   function init() {
-    injectRefillCard();
-    loadRefills();
-    hookSocket();
+    const btn = $('refillHdrBtn'); if (btn) btn.addEventListener('click', openPage);
+    api('/api/refill-settings').then(s => { settings = s; }).catch(() => {});
+    loadPending();
+    setInterval(loadPending, 60000);                    // safety net if a socket event is missed
+    const sock = (typeof socket !== 'undefined') ? socket : null;   // reuse app.js socket
+    if (sock) {
+      sock.on('refill:candidate', c => { if (c.increaseL >= MIN_REFILL_L && !queue.find(x => x.id === c.id)) { queue.push(c); updateBadge(); showNext(); } });
+            sock.on('refill:resolved', ev => { dropFromQueue(ev.id); afterChange(); showNext(); });
+    }
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && ov.classList.contains('open') && !popup.classList.contains('open')) closePage(); });
   }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
-  } else {
-    setTimeout(init, 500);
-  }
-
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 })();
