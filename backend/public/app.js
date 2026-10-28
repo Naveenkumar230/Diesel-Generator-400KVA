@@ -157,6 +157,8 @@ function _todayKeyIST() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 }
 
+const FUEL_SESSION_STORAGE_KEY = 'gensight_fuelSessionToday';
+
 
 async function fetchTodayStartFuel() {
   if (window._fuelSessionFetching) return;
@@ -183,6 +185,8 @@ async function fetchTodayStartFuel() {
     window._fuelSessionFetching = false;
   }
 }
+
+
 
 const _cachedFuelSession = _loadFuelSessionToday();
 window._fuelDayKey          = _cachedFuelSession ? _todayKeyIST() : null;
@@ -214,7 +218,6 @@ function _loadEngHoursToday() {
   return null;
 }
 
-const FUEL_SESSION_STORAGE_KEY = 'gensight_fuelSessionToday';
 
 function _loadFuelSessionToday() {
   try {
@@ -2238,14 +2241,21 @@ function renderDetailBody(section, data, isRange = false) {
         <div class="gsd-chart-header"><span class="gsd-chart-title">⏱️ Engine Run Timeline — When it started &amp; stopped</span></div>
         <div id="engineTimelineBody" style="padding:8px 2px;color:#8A9BB5;font-size:.82rem">Loading…</div>
       </div>` : '';
+       const dgGraphsHost = currentSection === 'fuel' ? '<div id="dgGraphsHost"></div>' : '';
     body.innerHTML = `
       <div class="gsd-stats-row">${buildStatsHTML(section, data)}</div>
       <div class="gsd-charts-area">
         ${engineTimelinePanel}
+        ${dgGraphsHost}
         ${buildChartsHTML(section)}
       </div>`;
     destroyDetailCharts();
     renderDetailCharts(section, data, isRange);
+
+        if (currentSection === 'fuel' && window.DGGraphs) {
+      window.DGGraphs.mount(document.getElementById('dgGraphsHost'));
+    }
+
     if (currentSection === 'engine') {
       const from = document.getElementById('gsdFrom').value;
       const to   = document.getElementById('gsdTo').value;
@@ -2552,6 +2562,7 @@ function todayStr()    { return new Date().toLocaleDateString('en-CA', { timeZon
   
 
  function closeDetail() {
+      if (window.DGGraphs) window.DGGraphs.destroy();   // ← ADD
     sessionStorage.removeItem('gsDetailOpen'); // ← ADD THIS
     overlayEl.classList.remove('open');
     document.body.style.overflow = '';

@@ -16,6 +16,7 @@ const MAX_HISTORY     = 60;    // live rolling window (~2 min at 2s polls)
 const MAX_DAY_POINTS  = 43200; // 24h at 2s = 43200 points max per day
 
 const compression = require('compression');
+const { createDgEngine } = require('./dg-engine');
 
 const app    = express();
 const server = http.createServer(app);
@@ -61,7 +62,7 @@ db.collection('fuel_events').createIndex({ date: 1, category: 1 });
 db.collection('history').createIndex({ date: 1, timestamps: 1 });
 db.collection('engine_events').createIndex({ date: 1, timestamp: 1 }); // ADD THIS
 
-setupRefillCollections().then(loadRefillCache).then(loadFuelRuns);
+setupRefillCollections().then(loadRefillCache).then(() => dgEngine.load());
 loadRefillDetectorState();
 loadGensetSettings();
 loadRuntimeState();
@@ -490,173 +491,17 @@ function currentFuelL() {
   return p > 0 ? Math.round(p * tankL() / 100) : null;
 }
 
-// ════════════════════════════════════════════════════════════════
-//  STABLE FUEL STOCK + RUN-BASED CONSUMPTION
-//  Paste into server.js right AFTER the refill block you already added.
-//  DELETE the old  function computeFuelConsumption() { ... }  (this replaces it).
-//  KEEP  app.get('/api/fuel/consumption', ...)  as it is.
-//
-//  Rules:
-//   • Consumption is counted ONLY while the DG runs (RPM > 100).
-//   • DG stopped  → consumption is frozen; sensor wobble is ignored.
-//   • Each run is measured as:  stable level BEFORE start − stable level AFTER stop
-//     (+ any CONFIRMED refill inside the run).  Medians remove the ±5–10 L noise.
-//   • Displayed stock is a smoothed median with a dead-band, so 600/601/605 → one value.
-// ════════════════════════════════════════════════════════════════
-const FUEL_FILTER = {
-  smoothSec:     180,   // live stock = median of the last 3 min
-  anchorSec:     120,   // run start level = median of the 2 min before the engine started
-  stopSettleSec: 120,   // wait this long after stop before measuring the end level
-  endWindowSec:   90,   // end level = median of the last 90 s of that wait
-  deadbandL:       5,   // displayed stock moves only when the smoothed value changes ≥ 5 L
-  runRpm:        100    // engine counts as running above this RPM
-};
+// ── Fuel consumption now comes from dg-engine.js ──
+function computeFuelConsumption() { return dgEngine.consumption(); }
 
-let fuelBuf       = [];                 // [{t, L}] raw litres, last 20 min (raw data in MongoDB history is untouched)
-let stockShownL   = null;               // stable stock shown on the dashboard
-let runSess       = null;               // the run in progress (or just stopped, waiting to settle)
-let consLedger    = { dateKey: null, doneL: 0, sinceDoneL: 0, runSecDone: 0 };
-let _runSaveMs    = 0;
-
-const medianOf = a => {
-  if (!a.length) return null;
-  const s = [...a].sort((x, y) => x - y), m = s.length >> 1;
-  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
-};
-const bufMedian = (fromMs, toMs) => medianOf(fuelBuf.filter(e => e.t >= fromMs && e.t < toMs).map(e => e.L));
-
-function ledgerRoll() {
-  const dk = todayKey();
-  if (consLedger.dateKey !== dk) { consLedger.dateKey = dk; consLedger.doneL = 0; consLedger.runSecDone = 0; }
-}
-
-// ── Call on every reading (from appendHistory) ──────────────────
-function updateFuelTracking(fuelL, rpm) {
-  if (!(fuelL > 0)) return;
-  const now = Date.now();
-  fuelBuf.push({ t: now, L: fuelL });
-  const cut = now - 20 * 60000;
-  while (fuelBuf.length && fuelBuf[0].t < cut) fuelBuf.shift();
-
-  const sm = bufMedian(now - FUEL_FILTER.smoothSec * 1000, Infinity);
-  if (stockShownL === null || Math.abs(sm - stockShownL) >= FUEL_FILTER.deadbandL) stockShownL = Math.round(sm);
-
-  const running = (Number(rpm) || 0) > FUEL_FILTER.runRpm;
-
-  if (running) {
-    if (!runSess) {
-      const pre = bufMedian(now - FUEL_FILTER.anchorSec * 1000, now);   // readings BEFORE this one
-      const startL = pre != null ? pre : sm;
-      runSess = { startTs: now, startL, refilledL: 0, sinceBaseL: startL, liveCons: 0, liveSince: 0, stopTs: null };
-      console.log(`[FuelRun] Started — start level ${Math.round(startL)} L`);
-    }
-    runSess.stopTs = null;                                              // restarted before settling → same run
-    // live figure never flickers downwards while running; the exact value is fixed when the run ends
-    runSess.liveCons  = Math.max(runSess.liveCons,  Math.max(0, runSess.startL + runSess.refilledL - sm));
-    runSess.liveSince = Math.max(runSess.liveSince, Math.max(0, runSess.sinceBaseL - sm));
-    if (db && now - _runSaveMs > 30000) saveRunSess();
-  } else if (runSess) {
-    if (!runSess.stopTs) runSess.stopTs = now;
-    if (now - runSess.stopTs >= FUEL_FILTER.stopSettleSec * 1000) finalizeRun(now);
-  }
-}
-
-function saveRunSess() {
-  _runSaveMs = Date.now();
-  db.collection('runtime').updateOne({ _id: 'fuelRun' },
-    { $set: { sess: runSess, savedAt: Date.now() } }, { upsert: true })
-    .catch(e => console.error('[FuelRun] save error:', e.message));
-}
-
-function finalizeRun(now) {
-  const s = runSess; runSess = null;
-  const endMed = bufMedian(now - FUEL_FILTER.endWindowSec * 1000, Infinity);
-  const endL = endMed != null ? endMed : (stockShownL || s.startL);
-  const consumedL = Math.max(0, Math.round(s.startL + s.refilledL - endL));
-  const sinceL    = Math.max(0, Math.round(s.sinceBaseL - endL));
-  ledgerRoll();
-  consLedger.doneL      += consumedL;
-  consLedger.sinceDoneL += sinceL;
-    consLedger.runSecDone += Math.round((s.stopTs - s.startTs) / 1000);
-  console.log(`[FuelRun] Finished — ${Math.round(s.startL)} → ${Math.round(endL)} L, consumed ${consumedL} L (refilled in run: ${s.refilledL} L)`);
-  if (db) {
-    db.collection('fuel_runs').insertOne({
-      date: dayKeyOf(new Date(s.stopTs)), startTs: new Date(s.startTs).toISOString(), endTs: new Date(s.stopTs).toISOString(),
-      startL: Math.round(s.startL), endL: Math.round(endL), refilledL: s.refilledL,
-      consumedL, sinceRefillL: sinceL, durationSec: Math.round((s.stopTs - s.startTs) / 1000), final: true
-    }).catch(e => console.error('[FuelRun] insert error:', e.message));
-    db.collection('runtime').updateOne({ _id: 'fuelRun' }, { $set: { sess: null, savedAt: Date.now() } }, { upsert: true }).catch(() => {});
-  }
-}
-
-// ── Call when a refill is CONFIRMED (confirm route + manual route) ──
+// Called by the two refill routes (confirm + manual)
 function onRefillConfirmed(r) {
-  consLedger.sinceDoneL = 0;                       // "since last refill" restarts
-  if (runSess) { runSess.refilledL += (r.addedL || 0); runSess.sinceBaseL = r.afterL; runSess.liveSince = 0; }
-  stockShownL = r.afterL;                          // stock jumps straight to the confirmed level
-  fuelBuf = [];                                    // old pre-refill readings must not drag the median
+  dgEngine.onRefillConfirmed(r)
+    .catch(e => console.error('[DG] refill credit failed:', e.message));
 }
-
-// ── Startup: restore today's finished runs + any run in progress ──
-async function loadFuelRuns() {
-  if (!db) return;
-  try {
-    await db.collection('fuel_runs').createIndex({ date: 1 });
-    await db.collection('fuel_runs').createIndex({ endTs: 1 });
-    const dk = todayKey();
-    const today = await db.collection('fuel_runs').find({ date: dk }).toArray();
-    consLedger.dateKey = dk;
-    consLedger.doneL = today.reduce((s, r) => s + (r.consumedL || 0), 0);
-        consLedger.runSecDone = today.reduce((s, r) => s + (r.durationSec || 0), 0);
-    const last = [...refillCache].sort((a, b) => String(b.time).localeCompare(String(a.time)))[0];
-    const since = await db.collection('fuel_runs').find(last ? { endTs: { $gt: last.time } } : { date: dk }).toArray();
-    consLedger.sinceDoneL = since.reduce((s, r) => s + (r.sinceRefillL || 0), 0);
-    const d = await db.collection('runtime').findOne({ _id: 'fuelRun' });
-    if (d && d.sess && Date.now() - d.savedAt < 12 * 3600e3 && !runSess) {
-      runSess = d.sess;
-      console.log('[FuelRun] Restored run in progress after restart');
-    }
-  } catch (e) { console.error('[FuelRun] load error:', e.message); }
-}
-
-function computeFuelConsumption() {
-  const out = {
-    available: false, stockL: stockShownL, currentL: stockShownL,
-    startL: (fuelSession.dateKey === todayKey() && fuelSession.startL != null) ? Math.round(fuelSession.startL) : null,
-    refillsTodayL: 0, todayConsumedL: null, runningNow: !!(runSess && !runSess.stopTs),
-    sinceRefill: null, estimated: false
-  };
-  if (stockShownL == null) return out;
-
-  ledgerRoll();
-  const dk = todayKey();
-  out.refillsTodayL = refillCache.filter(r => dayKeyOf(r.time) === dk).reduce((s, r) => s + (r.addedL || 0), 0);
-  let today = consLedger.doneL + (runSess ? runSess.liveCons : 0);
-
-  // Did the engine run today in a way this server did not watch live?
-  const observedSec = consLedger.runSecDone + (runSess ? ((runSess.stopTs || Date.now()) - runSess.startTs) / 1000 : 0);
-  const missedSec   = (engineHoursTodayComputed || 0) * 3600 - observedSec;
-  let balance = null;
-  if (missedSec > 400 && out.startL != null) {          // 400 s > the hour counter's 0.1 h resolution
-    balance = Math.max(0, out.startL + out.refillsTodayL - stockShownL);
-    if (balance > today) { today = balance; out.estimated = true; }
-  }
-  out.todayConsumedL = Math.round(today);
-  out.available = true;
-
-  const last = [...refillCache].sort((a, b) => String(b.time).localeCompare(String(a.time)))[0];
-  if (last) {
-    let since = consLedger.sinceDoneL + (runSess ? runSess.liveSince : 0);
-    if (out.estimated) since = Math.max(since, Math.max(0, last.afterL - stockShownL));
-    out.sinceRefill = { baselineL: last.afterL, refillTime: last.time, source: 'refill', consumedL: Math.round(since) };
-  } else {
-    out.sinceRefill = { baselineL: out.startL, refillTime: null, source: 'day-start', consumedL: out.todayConsumedL };
-  }
-  return out;
-}
-
 
 app.get('/api/fuel/consumption', (req, res) => res.json(computeFuelConsumption()));
+
 
 app.post('/api/settings/verify', (req, res) => {
   const { password } = req.body;
@@ -853,17 +698,32 @@ async function loadRuntimeState() {
   }
 }
 
+let engineHoursBaselineLoaded = false;
+
 async function loadEngineHoursBaseline() {
   if (!db) return;
+  const dk = todayKey();
   try {
     const doc = await db.collection('runtime').findOne({ _id: 'engineHoursBaseline' });
-    const dk = todayKey();
-    if (doc && doc.dateKey === dk) {
-      engineHoursBaseline = { dateKey: doc.dateKey, baselineHours: doc.baselineHours };
+    if (doc && doc.dateKey === dk && doc.baselineHours != null) {
+      engineHoursBaseline = { dateKey: dk, baselineHours: doc.baselineHours };
       console.log(`[EngineHours] Restored baseline: ${doc.baselineHours}h for ${dk}`);
+    } else {
+      // No saved baseline: the counter at today's first engine start is the day-start value
+      const first = await db.collection('engine_events')
+        .find({ date: dk, type: 'start', lifetimeHours: { $gt: 0 } })
+        .sort({ timestamp: 1 }).limit(1).toArray();
+      if (first.length) {
+        engineHoursBaseline = { dateKey: dk, baselineHours: first[0].lifetimeHours };
+        await db.collection('runtime').updateOne({ _id: 'engineHoursBaseline' },
+          { $set: { dateKey: dk, baselineHours: first[0].lifetimeHours } }, { upsert: true });
+        console.log(`[EngineHours] Rebuilt baseline from first start: ${first[0].lifetimeHours}h`);
+      }
     }
   } catch (e) {
     console.error('[EngineHours] load error:', e.message);
+  } finally {
+    engineHoursBaselineLoaded = true;
   }
 }
 
@@ -883,23 +743,18 @@ async function saveRuntimeState() {
   } catch (e) { console.error('[Runtime] save error:', e.message); }
 }
 
-// Called on every MQTT reading. Sets today's baseline the first time we see
-// a new day, then returns (lifetime hours now − baseline) = today's hours.
 function updateEngineHoursBaseline(lifetimeHours) {
+  if (db && !engineHoursBaselineLoaded) return engineHoursTodayComputed; // wait for the saved baseline
   const dk = todayKey();
-
   if (engineHoursBaseline.dateKey !== dk || engineHoursBaseline.baselineHours == null) {
     engineHoursBaseline = { dateKey: dk, baselineHours: lifetimeHours };
     if (db) {
-      db.collection('runtime').updateOne(
-        { _id: 'engineHoursBaseline' },
-        { $set: { dateKey: dk, baselineHours: lifetimeHours } },
-        { upsert: true }
-      ).catch(e => console.error('[EngineHours] save baseline error:', e.message));
+      db.collection('runtime').updateOne({ _id: 'engineHoursBaseline' },
+        { $set: { dateKey: dk, baselineHours: lifetimeHours } }, { upsert: true })
+        .catch(e => console.error('[EngineHours] save baseline error:', e.message));
     }
     console.log(`[EngineHours] New day baseline set: ${lifetimeHours}h`);
   }
-
   return Math.max(0, +(lifetimeHours - engineHoursBaseline.baselineHours).toFixed(3));
 }
 
@@ -934,6 +789,19 @@ function updateFuelSessionServer(fuelL, fuelPct) {
 
 // In-memory cache of recent refills (also persisted to MongoDB)
 let refillCache = [];   // [{_id, time, beforeL, afterL, addedL, beforePct, afterPct, person, auto}]
+
+
+// ── DG engine: runtime detection + fuel consumption (single source of truth) ──
+const dgEngine = createDgEngine({
+  getDb:      () => db,
+  tankL:      () => tankL(),
+  getRefills: () => refillCache,
+  getStartL:  () => (fuelSession.dateKey === todayKey() && fuelSession.startL != null)
+                      ? Math.round(fuelSession.startL) : null,
+  log: console
+});
+dgEngine.registerRoutes(app);   // adds /api/dg/hourly, /api/dg/daily, /api/dg/status
+
 
 // Load existing refills from MongoDB on startup
 async function loadRefillCache() {
@@ -1445,15 +1313,16 @@ const ts = new Date().toLocaleTimeString('en-IN', { hour12: false, timeZone: 'As
   const _fuelL = row.fuelLevelL > 0
     ? row.fuelLevelL
     : Math.round(row.fuelLevelPct * tankL() / 100);
-  runRefillDetection(_fuelL);
-  updateFuelTracking(_fuelL, row.engineRPM);        // ← NEW LINE
+   runRefillDetection(_fuelL);
   updateFuelSessionServer(_fuelL, row.fuelLevelPct);
-    classifyFuelEvent(row, dk, ts);
+  classifyFuelEvent(row, dk, ts);
 
-    // ── Engine hours today + start/stop tracking ───────────────
+  // ── DG runtime + fuel consumption (electrical-signal based) ──
+  dgEngine.onReading(payload, _fuelL);
   const lifetimeHours = parseFloat(eng.hours) || 0;
-  engineHoursTodayComputed = updateEngineHoursBaseline(lifetimeHours);
-  trackEngineRunEvents(row, dk, ts, lifetimeHours);
+  updateEngineHoursBaseline(lifetimeHours);                  // lifetime meter baseline only
+  engineHoursTodayComputed = dgEngine.todayRuntimeHours();   // today's runtime = engine value
+  // (trackEngineRunEvents removed: the engine now logs start/stop events itself)
 
   // ── Threshold-based email alerts ───────────────────────────
   checkAlertThresholds(row, payload);
@@ -1850,11 +1719,13 @@ app.get('/api/day-summary', async (req, res) => {
     const refilledL = refs.reduce((s, r) => s + (r.addedL || 0), 0);
     const balanceL  = Math.max(0, startL + refilledL - endL);
     const runL      = runs.reduce((s, r) => s + (r.consumedL || 0), 0);
-    const consumedL = runs.length ? runL : balanceL;
+        const tot = await dgEngine.dayTotals(dk);
+    const consumedL = (tot.status === 'ok' || tot.status === 'partial')
+      ? tot.consumedL : (runs.length ? runL : balanceL);
 
     let runSec = events.filter(e => e.type === 'stop').reduce((s, e) => s + (e.durationSec || 0), 0);
     if (!runSec) runSec = runs.reduce((s, r) => s + (r.durationSec || 0), 0);
-    if (dk === todayKey()) runSec = (engineHoursTodayComputed || 0) * 3600;
+    if (tot.runSec > 0) runSec = tot.runSec;
     const runHours = +(runSec / 3600).toFixed(2);
 
     res.json({
